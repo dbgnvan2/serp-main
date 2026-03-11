@@ -86,6 +86,7 @@ STOP_WORDS = {"the", "and", "to", "of", "a", "in", "is", "for", "on", "with", "a
               "vancouver", "bc", "british", "columbia", "canada", "north", "west", "counselling", "counseling", "therapy", "therapist",
               "counsellor", "counselor", "service", "services", "clinic", "centre", "center", "help", "support",
               "highlytrained"}
+SERPAPI_CALL_COUNT = 0
 
 
 def _env_bool(name, default=False):
@@ -183,6 +184,7 @@ def setup_logging(run_id):
 
 def _fetch_serp_api(params):
     """Internal function to query SerpApi with retry logic."""
+    global SERPAPI_CALL_COUNT
     if not SERPAPI_AVAILABLE:
         logging.error(
             "SerpApi client library is not installed. Install dependencies with: pip install -r requirements.txt"
@@ -196,6 +198,8 @@ def _fetch_serp_api(params):
     logging.info(f"API Call Parameters: {json.dumps(log_params, indent=2)}")
     for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
         try:
+            SERPAPI_CALL_COUNT += 1
+            logging.info(f"SerpApi Call Count: {SERPAPI_CALL_COUNT}")
             search = GoogleSearch(params)
             results = search.get_dict()
             logging.info(f"API Return Message: {json.dumps(results, indent=2)}")
@@ -1723,6 +1727,8 @@ def main():
         print(f"SUCCESS! Report saved to {OUTPUT_MD}")
     except Exception as e:
         logging.error(f"Error saving Markdown report: {e}")
+
+    print(f"--- Total SerpApi Calls: {SERPAPI_CALL_COUNT} ---")
 
 
 if __name__ == "__main__":

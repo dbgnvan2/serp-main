@@ -357,7 +357,10 @@ class SerpLauncherApp:
         options = []
         cwd = os.getcwd()
         for name in os.listdir(cwd):
-            if not (name.startswith("keywords_") and name.endswith(".csv")):
+            if not (
+                (name == "keywords.csv")
+                or (name.startswith("keywords_") and name.endswith(".csv"))
+            ):
                 continue
             path = os.path.join(cwd, name)
             if not os.path.isfile(path):

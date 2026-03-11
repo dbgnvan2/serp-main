@@ -45,7 +45,7 @@ To launch the GUI with the pinned Python 3.12 interpreter:
 
 In the GUI, keyword input is now file-based:
 
-- select an existing `keywords_*.csv` file from the dropdown, or
+- select an existing `keywords.csv` or `keywords_*.csv` file from the dropdown, or
 - enter `New Keywords (comma separated)` to create a new keyword file, or
 - do both to merge new keywords into an existing file
 
@@ -93,6 +93,9 @@ For lower SerpApi usage in routine runs:
 - leave `Deep Research Mode` off
 - leave `Run 2 AI-likely alternatives` off unless you want A.1/A.2 on priority keywords
 - use `Low API Mode` for the cheapest monitoring runs
+
+The audit log now prints a running `SerpApi Call Count` and a final
+`Total SerpApi Calls` summary for each run.
 
 If LLM access is unavailable, `List Content Opportunities` fails (no fallback).
 If the LLM returns a report that contradicts the pre-verified extraction
