@@ -213,6 +213,36 @@ If you don't act now, you'll lose your rank #3 position entirely.
             self.assertIn("- Unsupported claim.", text)
             self.assertIn("Bad draft text.", text)
 
+    def test_generate_brief_uses_theme_relevant_paa_and_competitors(self):
+        data = {
+            "strategic_recommendations": [
+                {
+                    "Pattern_Name": "The Resource Trap",
+                    "Status_Quo_Message": "Find free help",
+                    "Bowen_Bridge_Reframe": "Work the pattern",
+                    "Content_Angle": "When free venting costs you more",
+                    "Detected_Triggers": "free, low cost, affordable",
+                }
+            ],
+            "paa_questions": [
+                {"Question": "When should you stop reaching out to an estranged child?", "Category": "Distress"},
+                {"Question": "How to get free grief counselling?", "Category": "Distress"},
+                {"Question": "Is there free counseling in BC?", "Category": "Distress"},
+                {"Question": "How to get therapy covered in BC?", "Category": "Distress"},
+                {"Question": "What are the signs of a toxic adult child?", "Category": "Reactivity"},
+            ],
+            "organic_results": [
+                {"Rank": 1, "Title": "Free grief counselling resources", "Snippet": "Low cost and insurance options."},
+                {"Rank": 2, "Title": "Therapy coverage in BC", "Snippet": "How much is covered by insurance."},
+                {"Rank": 3, "Title": "Adult child estrangement advice", "Snippet": "When to stop reaching out."},
+            ],
+        }
+        brief = gcb.generate_brief(data, 0)
+        self.assertIn("How to get free grief counselling?", brief)
+        self.assertIn("How to get therapy covered in BC?", brief)
+        self.assertIn("Free grief counselling resources", brief)
+        self.assertIn("Therapy coverage in BC", brief)
+
 
 if __name__ == "__main__":
     unittest.main()

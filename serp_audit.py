@@ -120,8 +120,21 @@ LOW_API_MODE = _env_bool("SERP_LOW_API_MODE", False)
 SINGLE_KEYWORD_OVERRIDE = os.getenv("SERP_SINGLE_KEYWORD", "").strip()
 NO_CACHE_ENABLED = _env_bool(
     "SERP_ENABLE_NO_CACHE",
-    bool(CONFIG.get("serpapi", {}).get("no_cache", True))
+    bool(CONFIG.get("serpapi", {}).get("no_cache", False))
 )
+DEEP_RESEARCH_MODE = _env_bool(
+    "SERP_DEEP_RESEARCH_MODE",
+    bool(CONFIG.get("app", {}).get("deep_research_mode", False))
+)
+AI_QUERY_PRIORITY_ACTIONS = set(
+    CONFIG.get("app", {}).get(
+        "ai_query_priority_actions",
+        ["defend", "strengthen", "enter_cautiously"],
+    )
+)
+AI_PRIORITY_KEYWORDS_ENV = {
+    item.strip() for item in os.getenv("SERP_AI_PRIORITY_KEYWORDS", "").split("||") if item.strip()
+}
 
 if LOW_API_MODE:
     AI_QUERY_ALTERNATIVES_ENABLED = False
@@ -130,6 +143,11 @@ if LOW_API_MODE:
     MAPS_MAX_PAGES = 1
     AI_FALLBACK_WITHOUT_LOCATION = False
     NO_CACHE_ENABLED = False
+    DEEP_RESEARCH_MODE = False
+
+if not DEEP_RESEARCH_MODE:
+    RELATED_QUESTIONS_AI_FOLLOWUP = False
+    RELATED_QUESTIONS_AI_MAX_CALLS = 0
 
 # Explicit env overrides (still possible without low mode)
 GOOGLE_MAX_PAGES = max(1, _env_int("SERP_GOOGLE_MAX_PAGES", GOOGLE_MAX_PAGES))
@@ -1161,18 +1179,50 @@ def _ai_query_alternatives(base_keyword):
     return out
 
 
+def load_priority_keywords_from_analysis(path):
+    if not path or not os.path.exists(path):
+        return set()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return set()
+
+    priorities = []
+    if isinstance(data, dict):
+        priorities = data.get("strategic_flags", {}).get("content_priorities", [])
+
+    keywords = set()
+    for item in priorities:
+        action = item.get("action")
+        keyword = (item.get("keyword") or "").strip()
+        if keyword and action in AI_QUERY_PRIORITY_ACTIONS:
+            keywords.add(keyword)
+    return keywords
+
+
+def get_ai_priority_keywords():
+    if AI_PRIORITY_KEYWORDS_ENV:
+        return set(AI_PRIORITY_KEYWORDS_ENV)
+    analysis_path = CONFIG.get("files", {}).get("output_json", "market_analysis_v2.json")
+    return load_priority_keywords_from_analysis(analysis_path)
+
+
 def expand_keywords_for_ai(keywords):
     """
     Build query execution list.
     Returns tuples: (query_text, source_keyword, query_label).
     """
     expanded = []
+    priority_keywords = get_ai_priority_keywords()
     for keyword in keywords:
         base = (keyword or "").strip()
         if not base:
             continue
         expanded.append((base, base, "A"))
         if not AI_QUERY_ALTERNATIVES_ENABLED:
+            continue
+        if base not in priority_keywords:
             continue
         ai_alts = _ai_query_alternatives(base)[:2]
         for idx, alt in enumerate(ai_alts, start=1):

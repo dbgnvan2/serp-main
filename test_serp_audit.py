@@ -388,7 +388,10 @@ class TestSerpAudit(unittest.TestCase):
             }
         ]
 
-        results, aio_log, _ = serp_audit.fetch_serp_data("keyword", "run123")
+        with patch.object(serp_audit, "DEEP_RESEARCH_MODE", True), \
+             patch.object(serp_audit, "RELATED_QUESTIONS_AI_FOLLOWUP", True), \
+             patch.object(serp_audit, "RELATED_QUESTIONS_AI_MAX_CALLS", 1):
+            results, aio_log, _ = serp_audit.fetch_serp_data("keyword", "run123")
 
         self.assertIn("google_related_questions", results)
         self.assertEqual(aio_log["related_questions_ai_calls"], 1)
@@ -419,12 +422,34 @@ class TestSerpAudit(unittest.TestCase):
 
     def test_expand_keywords_for_ai_includes_labels(self):
         """Expanded queries should include A, A.1, A.2 labels when enabled."""
-        with patch.object(serp_audit, "AI_QUERY_ALTERNATIVES_ENABLED", True):
+        with patch.object(serp_audit, "AI_QUERY_ALTERNATIVES_ENABLED", True), \
+             patch.object(serp_audit, "get_ai_priority_keywords", return_value={"help with stress in vancouver"}):
             jobs = serp_audit.expand_keywords_for_ai(["help with stress in vancouver"])
         labels = [j[2] for j in jobs]
         self.assertIn("A", labels)
         self.assertIn("A.1", labels)
         self.assertIn("A.2", labels)
+
+    def test_expand_keywords_for_ai_skips_non_priority_keywords(self):
+        with patch.object(serp_audit, "AI_QUERY_ALTERNATIVES_ENABLED", True), \
+             patch.object(serp_audit, "get_ai_priority_keywords", return_value={"different keyword"}):
+            jobs = serp_audit.expand_keywords_for_ai(["help with stress in vancouver"])
+        self.assertEqual([j[2] for j in jobs], ["A"])
+
+    def test_load_priority_keywords_from_analysis(self):
+        with patch("os.path.exists", return_value=True), patch(
+            "builtins.open",
+            mock_open(read_data=json.dumps({
+                "strategic_flags": {
+                    "content_priorities": [
+                        {"keyword": "family cutoff counselling Vancouver", "action": "defend"},
+                        {"keyword": "estrangement", "action": "enter"},
+                    ]
+                }
+            }))
+        ):
+            keywords = serp_audit.load_priority_keywords_from_analysis("market_analysis.json")
+        self.assertEqual(keywords, {"family cutoff counselling Vancouver"})
 
     def test_apply_no_cache_toggle(self):
         """no_cache should only be added when enabled."""

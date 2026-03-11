@@ -4,8 +4,12 @@ import subprocess
 import sys
 import threading
 import os
+import json
+import re
+import shutil
 import time
 from datetime import datetime
+import yaml
 
 from apply_domain_override_candidates import merge_overrides, write_overrides
 from classifiers import ENTITY_TYPE_DESCRIPTIONS, ENTITY_TYPES, EntityClassifier
@@ -45,6 +49,8 @@ class SerpLauncherApp:
         self.domain_review_selected_row = None
         self.inline_type_editor = None
         self.last_completed_script = None
+        self.keyword_file_options = {}
+        self.current_run_context = None
 
         # Styles
         style = ttk.Style()
@@ -111,17 +117,11 @@ class SerpLauncherApp:
             {
                 "label": "2. List Content Opportunities",
                 "file": "generate_content_brief.py",
-                "args": [
-                    "--json", "market_analysis_v2.json",
-                    "--list",
-                    "--report-out", "content_opportunities_report.md",
-                    "--prompt-spec", "serp_analysis_prompt_v3.md",
-                    "--use-llm"
-                ],
+                "args": [],
                 "desc": (
                     "WHEN: Run when you are ready to write content.\n\n"
                     "WHY: The 'Strategist'. Generates a prompt-informed content opportunity report from the latest pipeline data.\n\n"
-                    "OUTPUT: Writes content_opportunities_report.md and prints a concise summary in the log.\n\n"
+                    "OUTPUT: Writes topic-matched content opportunities and advisory briefing files and prints a concise summary in the log.\n\n"
                     "NOTE: Requires Anthropic API access (ANTHROPIC_API_KEY). If unavailable, this step fails."
                 )
             },
@@ -190,17 +190,42 @@ class SerpLauncherApp:
         )
         self.low_api_mode_chk.pack(side="left", padx=5)
 
-        keyword_frame = ttk.Frame(root)
-        keyword_frame.pack(fill="x", padx=20, pady=(0, 8))
-        ttk.Label(
-            keyword_frame,
-            text="Single Search Term (optional, overrides keywords.csv):"
-        ).pack(side="left", padx=(0, 6))
-        self.single_keyword_var = tk.StringVar(value="")
-        self.single_keyword_entry = ttk.Entry(
-            keyword_frame, textvariable=self.single_keyword_var, width=52
+        self.deep_research_mode_var = tk.BooleanVar(value=False)
+        self.deep_research_mode_chk = ttk.Checkbutton(
+            btn_frame,
+            text="Deep Research Mode",
+            variable=self.deep_research_mode_var,
         )
-        self.single_keyword_entry.pack(side="left", fill="x", expand=True)
+        self.deep_research_mode_chk.pack(side="left", padx=5)
+
+        keyword_file_frame = ttk.Frame(root)
+        keyword_file_frame.pack(fill="x", padx=20, pady=(0, 4))
+        ttk.Label(keyword_file_frame, text="Keyword File:").pack(side="left", padx=(0, 6))
+        self.keyword_file_var = tk.StringVar(value="")
+        self.keyword_file_combo = ttk.Combobox(
+            keyword_file_frame,
+            textvariable=self.keyword_file_var,
+            state="readonly",
+            width=50,
+        )
+        self.keyword_file_combo.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            keyword_file_frame,
+            text="Refresh Files",
+            command=self.refresh_keyword_file_options,
+        ).pack(side="left", padx=(6, 0))
+
+        new_keywords_frame = ttk.Frame(root)
+        new_keywords_frame.pack(fill="x", padx=20, pady=(0, 8))
+        ttk.Label(
+            new_keywords_frame,
+            text="New Keywords (comma separated):"
+        ).pack(side="left", padx=(0, 6))
+        self.new_keywords_var = tk.StringVar(value="")
+        self.new_keywords_entry = ttk.Entry(
+            new_keywords_frame, textvariable=self.new_keywords_var, width=52
+        )
+        self.new_keywords_entry.pack(side="left", fill="x", expand=True)
 
         self.run_btn = ttk.Button(
             btn_frame, text="Run Selected Script", command=self.run_script, state="disabled")
@@ -216,6 +241,7 @@ class SerpLauncherApp:
         self.log_text = scrolledtext.ScrolledText(
             log_frame, height=12, state="disabled", bg="#1e1e1e", fg="#00ff00", font=("Consolas", 10))
         self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
+        self.refresh_keyword_file_options()
 
     def on_select(self, event):
         selection = self.script_listbox.curselection()
@@ -234,6 +260,181 @@ class SerpLauncherApp:
         self.desc_text.insert(tk.END, text)
         self.desc_text.config(state="disabled")
 
+    def config_path(self):
+        return os.path.join(os.getcwd(), "config.yml")
+
+    def load_config(self):
+        path = self.config_path()
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+
+    def save_config(self, config):
+        with open(self.config_path(), "w", encoding="utf-8") as f:
+            yaml.safe_dump(config, f, sort_keys=False, allow_unicode=False)
+
+    def read_keyword_file(self, path):
+        if not os.path.exists(path):
+            return []
+        keywords = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                value = line.strip()
+                if not value:
+                    continue
+                if value.lower() == "keyword":
+                    continue
+                keywords.append(value)
+        return keywords
+
+    def write_keyword_file(self, path, keywords):
+        with open(path, "w", encoding="utf-8") as f:
+            for keyword in keywords:
+                f.write(f"{keyword}\n")
+
+    def parse_new_keywords(self, text):
+        return [part.strip() for part in text.split(",") if part.strip()]
+
+    def extract_priority_keywords_from_analysis(self, json_path):
+        if not json_path or not os.path.exists(json_path):
+            return []
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return []
+        priorities = data.get("strategic_flags", {}).get("content_priorities", [])
+        allowed_actions = {"defend", "strengthen", "enter_cautiously"}
+        return [
+            item.get("keyword")
+            for item in priorities
+            if item.get("action") in allowed_actions and item.get("keyword")
+        ]
+
+    def sanitize_keyword_slug(self, keyword):
+        slug = keyword.strip().lower().replace(" ", "_")
+        slug = re.sub(r"[^a-z0-9_]", "", slug)
+        slug = re.sub(r"_+", "_", slug).strip("_")
+        return slug or "custom"
+
+    def derive_topic_slug(self, keyword_file):
+        filename = os.path.basename(keyword_file)
+        if filename.startswith("keywords_") and filename.endswith(".csv"):
+            return filename[len("keywords_"):-4]
+        return os.path.splitext(filename)[0]
+
+    def build_output_names(self, topic_slug):
+        return {
+            "output_xlsx": f"market_analysis_{topic_slug}.xlsx",
+            "output_json": f"market_analysis_{topic_slug}.json",
+            "output_md": f"market_analysis_{topic_slug}.md",
+            "report_out": f"content_opportunities_{topic_slug}.md",
+            "advisory_out": f"advisory_briefing_{topic_slug}.md",
+        }
+
+    def archive_existing_outputs(self, output_names, keys=None):
+        archive_dir = os.path.join(os.getcwd(), "runs")
+        os.makedirs(archive_dir, exist_ok=True)
+        date_stamp = datetime.now().strftime("%Y%m%d")
+        archived = []
+        selected_keys = keys or list(output_names.keys())
+        for key in selected_keys:
+            output_file = output_names[key]
+            file_path = os.path.join(os.getcwd(), output_file)
+            if not os.path.exists(file_path):
+                continue
+            base_name = os.path.basename(output_file)
+            stem, ext = os.path.splitext(base_name)
+            archived_path = os.path.join(archive_dir, f"{stem}_{date_stamp}{ext}")
+            if os.path.exists(archived_path):
+                continue
+            shutil.move(file_path, archived_path)
+            archived.append((output_file, os.path.relpath(archived_path, os.getcwd())))
+        return archived
+
+    def refresh_keyword_file_options(self):
+        options = []
+        cwd = os.getcwd()
+        for name in os.listdir(cwd):
+            if not (name.startswith("keywords_") and name.endswith(".csv")):
+                continue
+            path = os.path.join(cwd, name)
+            if not os.path.isfile(path):
+                continue
+            keywords = self.read_keyword_file(path)
+            options.append({
+                "display": f"{name} ({len(keywords)} keywords)",
+                "path": path,
+                "mtime": os.path.getmtime(path),
+            })
+        options.sort(key=lambda item: (-item["mtime"], item["display"]))
+        self.keyword_file_options = {"<New / none>": None}
+        values = ["<New / none>"]
+        for item in options:
+            self.keyword_file_options[item["display"]] = item["path"]
+            values.append(item["display"])
+        self.keyword_file_combo["values"] = values
+        if self.keyword_file_var.get() not in self.keyword_file_options:
+            self.keyword_file_var.set(values[0] if values else "")
+
+    def prepare_keyword_run_context(self):
+        selected_display = self.keyword_file_var.get().strip()
+        selected_path = self.keyword_file_options.get(selected_display) if selected_display else None
+        new_keywords = self.parse_new_keywords(self.new_keywords_var.get())
+
+        if not selected_path and not new_keywords:
+            raise ValueError("Please select an existing keyword file or enter new keywords.")
+
+        added_keywords = []
+        keyword_file = selected_path
+
+        if selected_path and not new_keywords:
+            keywords = self.read_keyword_file(selected_path)
+        elif not selected_path and new_keywords:
+            slug = self.sanitize_keyword_slug(new_keywords[0])
+            keyword_file = os.path.join(os.getcwd(), f"keywords_{slug}.csv")
+            keywords = new_keywords
+            self.write_keyword_file(keyword_file, keywords)
+        else:
+            existing_keywords = self.read_keyword_file(selected_path)
+            seen = {value.lower(): value for value in existing_keywords}
+            keywords = list(existing_keywords)
+            for keyword in new_keywords:
+                lowered = keyword.lower()
+                if lowered in seen:
+                    continue
+                seen[lowered] = keyword
+                keywords.append(keyword)
+                added_keywords.append(keyword)
+            self.write_keyword_file(selected_path, keywords)
+
+        topic_slug = self.derive_topic_slug(keyword_file)
+        output_names = self.build_output_names(topic_slug)
+
+        config = self.load_config()
+        files_cfg = config.setdefault("files", {})
+        files_cfg["input_csv"] = os.path.basename(keyword_file)
+        files_cfg["output_xlsx"] = output_names["output_xlsx"]
+        files_cfg["output_json"] = output_names["output_json"]
+        files_cfg["output_md"] = output_names["output_md"]
+        self.save_config(config)
+
+        self.refresh_keyword_file_options()
+        selected_base = os.path.basename(keyword_file)
+        for display, path in self.keyword_file_options.items():
+            if path and os.path.basename(path) == selected_base:
+                self.keyword_file_var.set(display)
+                break
+
+        return {
+            "keyword_file": keyword_file,
+            "keywords": keywords,
+            "added_keywords": added_keywords,
+            "topic_slug": topic_slug,
+            "output_names": output_names,
+        }
+
     def run_script(self):
         selection = self.script_listbox.curselection()
         if not selection:
@@ -244,7 +445,36 @@ class SerpLauncherApp:
             self.open_domain_override_review()
             return
 
-        cmd = [sys.executable, script_info["file"]] + script_info["args"]
+        run_context = None
+        output_names = None
+        if script_info["file"] in {"run_pipeline.py", "generate_content_brief.py"}:
+            try:
+                run_context = self.prepare_keyword_run_context()
+            except ValueError as exc:
+                messagebox.showerror("Keyword Setup", str(exc))
+                return
+            output_names = run_context["output_names"]
+            if script_info["file"] == "run_pipeline.py":
+                archive_keys = ["output_xlsx", "output_json", "output_md"]
+            else:
+                archive_keys = ["report_out", "advisory_out"]
+            archived = self.archive_existing_outputs(output_names, keys=archive_keys)
+        else:
+            archived = []
+
+        cmd = [sys.executable, script_info["file"]]
+        if script_info["file"] == "generate_content_brief.py":
+            cmd.extend([
+                "--json", output_names["output_json"],
+                "--list",
+                "--report-out", output_names["report_out"],
+                "--advisory-briefing",
+                "--advisory-out", output_names["advisory_out"],
+                "--prompt-spec", "serp_analysis_prompt_v3.md",
+                "--use-llm",
+            ])
+        else:
+            cmd.extend(script_info["args"])
         cwd = os.getcwd()
         env = os.environ.copy()
         env["SERP_LOW_API_MODE"] = "1" if self.low_api_mode_var.get() else "0"
@@ -252,8 +482,17 @@ class SerpLauncherApp:
             "0" if self.low_api_mode_var.get()
             else ("1" if self.ai_query_alts_var.get() else "0")
         )
-        env["SERP_SINGLE_KEYWORD"] = self.single_keyword_var.get().strip()
+        env["SERP_DEEP_RESEARCH_MODE"] = (
+            "0" if self.low_api_mode_var.get()
+            else ("1" if self.deep_research_mode_var.get() else "0")
+        )
+        env["SERP_SINGLE_KEYWORD"] = ""
+        if run_context and output_names:
+            previous_json = os.path.join(cwd, output_names["output_json"])
+            priority_keywords = self.extract_priority_keywords_from_analysis(previous_json)
+            env["SERP_AI_PRIORITY_KEYWORDS"] = "||".join(priority_keywords)
         started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.current_run_context = run_context
 
         self.log("\n" + "=" * 68 + "\n")
         self.log(f"[{started_at}] Starting: {script_info['label']}\n")
@@ -261,12 +500,32 @@ class SerpLauncherApp:
         self.log(f"> Python executable: {sys.executable}\n")
         self.log(f"> Command: {' '.join(cmd)}\n")
         self.log(f"> Script file: {script_info['file']}\n")
+        if run_context:
+            self.log(f"> Keyword file: {os.path.basename(run_context['keyword_file'])}\n")
+            self.log(f"> Keyword count: {len(run_context['keywords'])}\n")
+            self.log(f"> Topic slug: {run_context['topic_slug']}\n")
+            if run_context["added_keywords"]:
+                added = ", ".join(f"'{keyword}'" for keyword in run_context["added_keywords"])
+                self.log(
+                    f"> Added {len(run_context['added_keywords'])} new keywords to "
+                    f"{os.path.basename(run_context['keyword_file'])}: {added}\n"
+                )
+            self.log(
+                f"> Outputs: {output_names['output_xlsx']}, {output_names['output_json']}, "
+                f"{output_names['output_md']}, {output_names['report_out']}, {output_names['advisory_out']}\n"
+            )
+        for original, archived_path in archived:
+            self.log(f"> Archived existing {original} -> {archived_path}\n")
         self.log(f"> SERP_LOW_API_MODE={env['SERP_LOW_API_MODE']}\n")
         self.log(f"> SERP_ENABLE_AI_QUERY_ALTERNATIVES={env['SERP_ENABLE_AI_QUERY_ALTERNATIVES']}\n")
-        if env["SERP_SINGLE_KEYWORD"]:
-            self.log(f"> SERP_SINGLE_KEYWORD={env['SERP_SINGLE_KEYWORD']}\n")
+        self.log(f"> SERP_DEEP_RESEARCH_MODE={env['SERP_DEEP_RESEARCH_MODE']}\n")
+        if env.get("SERP_AI_PRIORITY_KEYWORDS"):
+            self.log(
+                f"> SERP_AI_PRIORITY_KEYWORDS={env['SERP_AI_PRIORITY_KEYWORDS'].replace('||', ', ')}\n"
+            )
         else:
-            self.log("> SERP_SINGLE_KEYWORD=<empty; using keywords.csv>\n")
+            self.log("> SERP_AI_PRIORITY_KEYWORDS=<none; A.1/A.2 skipped unless priority keywords are available>\n")
+        self.log("> SERP_SINGLE_KEYWORD=<disabled; using keyword file management>\n")
         self.log("-" * 68 + "\n")
         self.run_btn.config(state="disabled")
 
@@ -314,6 +573,7 @@ class SerpLauncherApp:
                 f"\n[Error starting process after {elapsed_s:.1f}s: {e}]\n" + "=" * 68 + "\n"
             )
         finally:
+            self.root.after(0, self.refresh_keyword_file_options)
             self.root.after(0, lambda: self.run_btn.config(state="normal"))
 
     def log(self, message):
@@ -331,8 +591,11 @@ class SerpLauncherApp:
         if self.low_api_mode_var.get():
             self.ai_query_alts_var.set(False)
             self.ai_query_alts_chk.state(["disabled"])
+            self.deep_research_mode_var.set(False)
+            self.deep_research_mode_chk.state(["disabled"])
         else:
             self.ai_query_alts_chk.state(["!disabled"])
+            self.deep_research_mode_chk.state(["!disabled"])
 
     def open_domain_override_review(self):
         paths = load_config_paths()

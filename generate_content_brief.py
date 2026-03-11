@@ -51,6 +51,27 @@ DEFAULT_CLIENT_CONTEXT = {
     ],
 }
 
+BRIEF_PAA_THEMES = {
+    "The Medical Model Trap": [
+        "therapy", "therapist", "counselling", "counselor",
+        "session", "diagnosis", "mental health", "treatment",
+        "professional", "psychologist",
+    ],
+    "The Fusion Trap": [
+        "reach out", "reconnect", "contact", "close",
+        "relationship", "communicate", "talking",
+        "stop reaching", "go no contact",
+    ],
+    "The Resource Trap": [
+        "cost", "free", "afford", "pay", "price", "insurance",
+        "covered", "sliding scale", "low cost", "how much",
+    ],
+    "The Blame/Reactivity Trap": [
+        "toxic", "narcissist", "abusive", "signs", "fault",
+        "blame", "anger", "deal with", "mean",
+    ],
+}
+
 ADVISORY_SYSTEM_PROMPT = """You are a senior SEO and content strategy advisor briefing the
 executive director of a small nonprofit counselling organization.
 Your job is to explain what market intelligence data means for their
@@ -1072,23 +1093,20 @@ def build_user_prompt(template, context, extracted_data, warnings):
     return user_prompt
 
 
-def build_validation_retry_prompt(original_user_prompt, validation_issues):
+def build_correction_message(validation_issues):
     issues_text = "\n".join(f"- {issue}" for issue in validation_issues)
     correction_rules = [
         "Return the full corrected document, not notes about the correction.",
-        "Delete unsupported claims entirely if you cannot restate them with verified evidence.",
-        "Do not use the phrase 'cross-cutting' for any term unless the verified data explicitly supports it.",
-        "If an issue mentions 'toxic', either remove the claim or state that evidence is limited and not cross-cluster.",
-        "Do not speculate about data collection issues, bugs, or sampling errors.",
-        "Use risk language for future outcomes: 'risk losing' or 'could lose', not 'will lose' or 'will disappear', unless the loss already happened in the data.",
+        "Delete unsupported claims if you cannot restate them with verified evidence.",
+        "Do not restate any rejected claim below.",
+        "Use risk language for future outcomes unless the loss already happened in the data.",
     ]
     return (
-        f"{original_user_prompt}\n\n"
         "IMPORTANT REVISION INSTRUCTIONS:\n"
-        "A previous draft failed deterministic evidence validation. You must revise the report so every claim matches the pre-computed evidence exactly.\n"
+        "A previous draft failed evidence validation. Revise it so every claim matches the verified evidence exactly.\n"
         + "\n".join(f"- {rule}" for rule in correction_rules)
         + "\n"
-        "Do not repeat any of the invalid claims below.\n"
+        "Rejected claims:\n"
         f"{issues_text}\n"
     )
 
@@ -1115,7 +1133,7 @@ def write_validation_artifact(output_path, title, validation_issues, draft_text)
     return artifact_path
 
 
-def run_llm_report(system_prompt, user_prompt, model, max_tokens):
+def run_llm_report(system_prompt, user_prompt, model, max_tokens, prior_response=None, correction_message=None):
     if not ANTHROPIC_AVAILABLE:
         raise RuntimeError("anthropic package not installed.")
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -1124,11 +1142,26 @@ def run_llm_report(system_prompt, user_prompt, model, max_tokens):
 
     progress(f"[7/7] Calling Anthropic model {model}...")
     client = anthropic.Anthropic(api_key=api_key)
+    messages = [{"role": "user", "content": user_prompt}]
+    if prior_response is not None:
+        if not correction_message:
+            raise RuntimeError("correction_message is required when prior_response is provided.")
+        messages = [
+            {"role": "user", "content": user_prompt},
+            {"role": "assistant", "content": prior_response},
+            {"role": "user", "content": correction_message},
+        ]
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
+        system=[
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=messages,
     )
     chunks = []
     for block in response.content:
@@ -1436,6 +1469,69 @@ def generate_local_report(extracted_data, context, warnings):
     return "\n".join(lines).strip()
 
 
+def score_paa_for_brief(question_text, theme_words):
+    q_lower = str(question_text or "").lower()
+    return sum(1 for word in theme_words if word in q_lower)
+
+
+def get_relevant_paa(paa_questions, pattern_name, max_results=5):
+    theme_words = BRIEF_PAA_THEMES.get(pattern_name, [])
+    if not theme_words:
+        return paa_questions[:max_results]
+
+    scored = [
+        (q, score_paa_for_brief(q.get("Question", ""), theme_words), idx)
+        for idx, q in enumerate(paa_questions)
+    ]
+    scored.sort(key=lambda item: (-item[1], item[2]))
+
+    matched = [q for q, score, _idx in scored if score > 0][:max_results]
+
+    if len(matched) < max_results:
+        matched_texts = {q.get("Question") for q in matched}
+        distress = [
+            q for q in paa_questions
+            if q.get("Category") in ("Distress", "Reactivity")
+            and q.get("Question") not in matched_texts
+        ]
+        matched.extend(distress[:max_results - len(matched)])
+
+    if len(matched) < max_results:
+        matched_texts = {q.get("Question") for q in matched}
+        remaining = [
+            q for q in paa_questions
+            if q.get("Question") not in matched_texts
+        ]
+        matched.extend(remaining[:max_results - len(matched)])
+
+    return matched[:max_results]
+
+
+def get_relevant_competitors(organic_results, pattern_name, max_results=3):
+    theme_words = BRIEF_PAA_THEMES.get(pattern_name, [])
+    seen_titles = set()
+    scored = []
+    for idx, row in enumerate(organic_results):
+        title = row.get("Title", "")
+        if not title or title in seen_titles:
+            continue
+        seen_titles.add(title)
+        combined = f"{title} {row.get('Snippet', '')}".lower()
+        score = sum(1 for word in theme_words if word in combined)
+        rank = _safe_int(row.get("Rank"), 999)
+        scored.append((title, score, rank, idx))
+
+    scored.sort(key=lambda item: (-item[1], item[2], item[3]))
+    top = [title for title, score, _rank, _idx in scored if score > 0][:max_results]
+    if len(top) < max_results:
+        remaining = [
+            title for title, _score, _rank, _idx in scored
+            if title not in top
+        ]
+        top.extend(remaining[:max_results - len(top)])
+    return top[:max_results]
+
+
 def list_recommendations(data, args):
     config = load_yaml_config(args.config)
     progress("[3/7] Resolving client context from YAML...")
@@ -1481,12 +1577,14 @@ def list_recommendations(data, args):
             validation_issues = validate_llm_report(report, extracted)
             if validation_issues and not args.allow_unverified_report:
                 progress("[retry] Initial LLM draft failed evidence validation. Requesting one corrected revision...")
-                retry_prompt = build_validation_retry_prompt(user_prompt, validation_issues)
+                correction_msg = build_correction_message(validation_issues)
                 report = run_llm_report(
                     system_prompt=system_prompt,
-                    user_prompt=retry_prompt,
+                    user_prompt=user_prompt,
                     model=args.llm_model,
                     max_tokens=args.llm_max_tokens,
+                    prior_response=report,
+                    correction_message=correction_msg,
                 )
                 validation_issues = validate_llm_report(report, extracted)
                 if validation_issues:
@@ -1532,7 +1630,7 @@ def list_recommendations(data, args):
                 additional_context=context["additional_context"],
                 strategic_flags_json=json.dumps(
                     extracted["strategic_flags"],
-                    indent=2,
+                    separators=(",", ":"),
                     default=str,
                 ),
                 market_report_text=report,
@@ -1545,12 +1643,14 @@ def list_recommendations(data, args):
             )
             advisory_issues = validate_advisory_briefing(advisory_report, extracted)
             if advisory_issues:
-                retry_prompt = build_validation_retry_prompt(advisory_user, advisory_issues)
+                correction_msg = build_correction_message(advisory_issues)
                 advisory_report = run_llm_report(
                     system_prompt=ADVISORY_SYSTEM_PROMPT,
-                    user_prompt=retry_prompt,
+                    user_prompt=advisory_user,
                     model=advisory_model,
                     max_tokens=4000,
+                    prior_response=advisory_report,
+                    correction_message=correction_msg,
                 )
                 advisory_issues = validate_advisory_briefing(advisory_report, extracted)
                 if advisory_issues:
@@ -1598,21 +1698,13 @@ def generate_brief(data, rec_index=0):
     rec = recs[rec_index]
     paa = data.get("paa_questions", [])
     organic = data.get("organic_results", [])
-    triggers = str(rec.get("Detected_Triggers", "")).split(", ")
-
-    relevant_paa = []
-    if triggers and triggers[0] != "N/A":
-        for q in paa:
-            q_text = str(q.get("Question", "")).lower()
-            if any(t and t.lower() in q_text for t in triggers):
-                relevant_paa.append(q.get("Question"))
-
-    if not relevant_paa:
-        relevant_paa = [q.get("Question") for q in paa[:5]]
-    else:
-        relevant_paa = relevant_paa[:5]
-
-    top_competitors = [o.get("Title") for o in organic[:3]]
+    relevant_paa_records = get_relevant_paa(
+        paa, rec.get("Pattern_Name"), max_results=5
+    )
+    relevant_paa = [q.get("Question") for q in relevant_paa_records]
+    top_competitors = get_relevant_competitors(
+        organic, rec.get("Pattern_Name"), max_results=3
+    )
     lines = []
     lines.append(f"# Content Brief: {rec.get('Content_Angle')}")
     lines.append(f"**Strategy:** {rec.get('Pattern_Name')}")

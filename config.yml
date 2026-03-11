@@ -11,6 +11,7 @@ serpapi:
   retry_max_attempts: 3
   retry_backoff_seconds: 1.0
   request_delay_seconds: 0.2
+  no_cache: false
   ai_fallback_without_location: true
   related_questions_ai_followup: true
   related_questions_ai_max_calls: 5
@@ -31,6 +32,11 @@ enrichment:
 
 app:
   force_local_intent: true
+  deep_research_mode: false
+  ai_query_priority_actions:
+    - "defend"
+    - "strengthen"
+    - "enter_cautiously"
   # Add extra stop words here if needed
 
 analysis_report:

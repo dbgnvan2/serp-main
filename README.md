@@ -43,21 +43,41 @@ To launch the GUI with the pinned Python 3.12 interpreter:
 ./run_serp_launcher.sh
 ```
 
-In the GUI, you can optionally enter one term in `Single Search Term` to override `keywords.csv` for that run.
+In the GUI, keyword input is now file-based:
 
-CLI equivalent override:
+- select an existing `keywords_*.csv` file from the dropdown, or
+- enter `New Keywords (comma separated)` to create a new keyword file, or
+- do both to merge new keywords into an existing file
+
+The launcher now:
+
+- auto-creates keyword files named from the first keyword
+- updates `config.yml` to point `files.input_csv` at the selected file
+- auto-names outputs to match the keyword-file slug
+- archives previous outputs into `runs/` with a date stamp before overwriting
+- keeps SerpApi cache enabled by default (`serpapi.no_cache: false`)
+- limits `A.1/A.2` AI-likely query alternatives to high-priority keywords from the latest analysis
+- runs related-question AI follow-up only when `Deep Research Mode` is enabled
+
+Example:
 
 ```bash
-SERP_SINGLE_KEYWORD="estrangement Vancouver" python serp_audit.py
+keywords_estrangement.csv
+market_analysis_estrangement.xlsx
+market_analysis_estrangement.json
+market_analysis_estrangement.md
+content_opportunities_estrangement.md
+advisory_briefing_estrangement.md
 ```
 
 ## Content Opportunities Report
 
-`List Content Opportunities` now generates a richer report using the latest
-`market_analysis_v2.json` and writes:
+`List Content Opportunities` now generates a richer report using the
+topic-matched JSON from the selected keyword file and writes:
 
 ```bash
-content_opportunities_report.md
+content_opportunities_<topic>.md
+advisory_briefing_<topic>.md
 ```
 
 It uses the prompt spec in `serp_analysis_prompt_v3.md` with Anthropic and
@@ -67,6 +87,12 @@ Required for launcher mode:
 
 - `ANTHROPIC_API_KEY` env var
 - `anthropic` Python package
+
+For lower SerpApi usage in routine runs:
+
+- leave `Deep Research Mode` off
+- leave `Run 2 AI-likely alternatives` off unless you want A.1/A.2 on priority keywords
+- use `Low API Mode` for the cheapest monitoring runs
 
 If LLM access is unavailable, `List Content Opportunities` fails (no fallback).
 If the LLM returns a report that contradicts the pre-verified extraction
