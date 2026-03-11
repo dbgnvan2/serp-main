@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock, mock_open
 import serp_audit
 import json
 import os
+from classifiers import EntityClassifier
 
 
 class TestSerpAudit(unittest.TestCase):
@@ -458,6 +459,20 @@ class TestSerpAudit(unittest.TestCase):
             keywords = serp_audit.load_keywords("keywords.csv")
         self.assertEqual(keywords, ["k1", "k2"])
         mock_read_csv.assert_called_once_with("keywords.csv", header=None)
+
+    def test_entity_classifier_domain_only_directory(self):
+        """Known directory domains should classify without fetched HTML."""
+        classifier = EntityClassifier(override_file="/nonexistent/overrides.yml")
+        entity_type, confidence, evidence = classifier.classify("counsellingbc.com", None)
+        self.assertEqual(entity_type, "directory")
+        self.assertGreaterEqual(confidence, 0.9)
+
+    def test_entity_classifier_domain_only_media(self):
+        """Known media/community domains should classify without fetched HTML."""
+        classifier = EntityClassifier(override_file="/nonexistent/overrides.yml")
+        entity_type, confidence, evidence = classifier.classify("reddit.com", None)
+        self.assertEqual(entity_type, "media")
+        self.assertGreaterEqual(confidence, 0.9)
 
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.makedirs')

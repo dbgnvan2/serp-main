@@ -1,16 +1,50 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 import subprocess
 import sys
 import threading
 import os
+import time
+from datetime import datetime
+
+from apply_domain_override_candidates import merge_overrides, write_overrides
+from classifiers import ENTITY_TYPE_DESCRIPTIONS, ENTITY_TYPES, EntityClassifier
+from generate_domain_override_candidates import (
+    collect_candidates,
+    load_json,
+    load_overrides,
+    split_candidates,
+)
+from refresh_analysis_outputs import load_config_paths, refresh_analysis_outputs
 
 
 class SerpLauncherApp:
+    EXIT_STATUS_LABELS = {
+        0: "SUCCESS",
+        1: "MISMATCH",
+        2: "ERROR",
+    }
+    DOMAIN_REVIEW_TAG_STYLES = {
+        "counselling": {"background": "#e8f5e9"},
+        "legal": {"background": "#fff3e0"},
+        "directory": {"background": "#e3f2fd"},
+        "nonprofit": {"background": "#f3e5f5"},
+        "government": {"background": "#eceff1"},
+        "media": {"background": "#fff8e1"},
+        "professional_association": {"background": "#e0f7fa"},
+        "education": {"background": "#f1f8e9"},
+        "unknown": {"background": "#f5f5f5"},
+    }
+
     def __init__(self, root):
         self.root = root
         self.root.title("SERP Intelligence Launcher")
         self.root.geometry("800x650")
+        self.domain_review_window = None
+        self.domain_review_rows = []
+        self.domain_review_selected_row = None
+        self.inline_type_editor = None
+        self.last_completed_script = None
 
         # Styles
         style = ttk.Style()
@@ -77,11 +111,18 @@ class SerpLauncherApp:
             {
                 "label": "2. List Content Opportunities",
                 "file": "generate_content_brief.py",
-                "args": ["--json", "market_analysis_v2.json", "--list"],
+                "args": [
+                    "--json", "market_analysis_v2.json",
+                    "--list",
+                    "--report-out", "content_opportunities_report.md",
+                    "--prompt-spec", "serp_analysis_prompt_v3.md",
+                    "--use-llm"
+                ],
                 "desc": (
                     "WHEN: Run when you are ready to write content.\n\n"
-                    "WHY: The 'Strategist'. Lists strategic recommendations found in the analysis (e.g., 'The Medical Model Trap').\n\n"
-                    "NOTE: To generate a specific brief, run this script from the command line with --index <N>."
+                    "WHY: The 'Strategist'. Generates a prompt-informed content opportunity report from the latest pipeline data.\n\n"
+                    "OUTPUT: Writes content_opportunities_report.md and prints a concise summary in the log.\n\n"
+                    "NOTE: Requires Anthropic API access (ANTHROPIC_API_KEY). If unavailable, this step fails."
                 )
             },
             {
@@ -110,6 +151,17 @@ class SerpLauncherApp:
                 "desc": (
                     "WHEN: Run if you suspect data issues.\n\n"
                     "WHY: Checks the SQLite database to confirm that enrichment data (URL features, Domain features) is being correctly populated."
+                )
+            },
+            {
+                "label": "6. Review Domain Override Candidates",
+                "file": None,
+                "args": [],
+                "action": "review_domain_overrides",
+                "desc": (
+                    "WHEN: Run after a pipeline run when you want to improve entity classification.\n\n"
+                    "WHY: Opens an in-app checklist of recurring domains not yet in domain_overrides.yml.\n\n"
+                    "OUTPUT: Lets you approve checked items directly into domain_overrides.yml."
                 )
             }
         ]
@@ -188,7 +240,12 @@ class SerpLauncherApp:
             return
 
         script_info = self.scripts[selection[0]]
+        if script_info.get("action") == "review_domain_overrides":
+            self.open_domain_override_review()
+            return
+
         cmd = [sys.executable, script_info["file"]] + script_info["args"]
+        cwd = os.getcwd()
         env = os.environ.copy()
         env["SERP_LOW_API_MODE"] = "1" if self.low_api_mode_var.get() else "0"
         env["SERP_ENABLE_AI_QUERY_ALTERNATIVES"] = (
@@ -196,22 +253,28 @@ class SerpLauncherApp:
             else ("1" if self.ai_query_alts_var.get() else "0")
         )
         env["SERP_SINGLE_KEYWORD"] = self.single_keyword_var.get().strip()
+        started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        self.log(f"> Executing: {' '.join(cmd)}\n")
+        self.log("\n" + "=" * 68 + "\n")
+        self.log(f"[{started_at}] Starting: {script_info['label']}\n")
+        self.log(f"> Working directory: {cwd}\n")
+        self.log(f"> Python executable: {sys.executable}\n")
+        self.log(f"> Command: {' '.join(cmd)}\n")
+        self.log(f"> Script file: {script_info['file']}\n")
         self.log(f"> SERP_LOW_API_MODE={env['SERP_LOW_API_MODE']}\n")
-        self.log(
-            f"> SERP_ENABLE_AI_QUERY_ALTERNATIVES={env['SERP_ENABLE_AI_QUERY_ALTERNATIVES']}\n"
-        )
+        self.log(f"> SERP_ENABLE_AI_QUERY_ALTERNATIVES={env['SERP_ENABLE_AI_QUERY_ALTERNATIVES']}\n")
         if env["SERP_SINGLE_KEYWORD"]:
             self.log(f"> SERP_SINGLE_KEYWORD={env['SERP_SINGLE_KEYWORD']}\n")
         else:
             self.log("> SERP_SINGLE_KEYWORD=<empty; using keywords.csv>\n")
+        self.log("-" * 68 + "\n")
         self.run_btn.config(state="disabled")
 
         threading.Thread(target=self.execute_thread,
-                         args=(cmd, env), daemon=True).start()
+                         args=(cmd, env, cwd), daemon=True).start()
 
-    def execute_thread(self, cmd, env):
+    def execute_thread(self, cmd, env, cwd):
+        started_at = time.perf_counter()
         try:
             # Use Popen to capture output in real-time
             process = subprocess.Popen(
@@ -220,7 +283,7 @@ class SerpLauncherApp:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                cwd=os.getcwd(),  # Ensure running in correct directory
+                cwd=cwd,
                 env=env
             )
 
@@ -228,11 +291,28 @@ class SerpLauncherApp:
                 self.root.after(0, self.log, line)
 
             process.wait()
+            elapsed_s = time.perf_counter() - started_at
+            finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            status_label = self.EXIT_STATUS_LABELS.get(
+                process.returncode, f"FAILED_{process.returncode}"
+            )
+            completed_script = os.path.basename(cmd[1]) if len(cmd) > 1 else ""
             self.root.after(
-                0, self.log, f"\n[Process finished with exit code {process.returncode}]\n" + "-"*60 + "\n")
+                0,
+                self.log,
+                f"\n[{finished_at}] Process finished with status {status_label} "
+                f"(elapsed: {elapsed_s:.1f}s)\n" + "=" * 68 + "\n"
+            )
+            if process.returncode == 0 and completed_script == "run_pipeline.py":
+                self.root.after(0, self.open_domain_override_review_after_pipeline)
 
         except Exception as e:
-            self.root.after(0, self.log, f"\n[Error starting process: {e}]\n")
+            elapsed_s = time.perf_counter() - started_at
+            self.root.after(
+                0,
+                self.log,
+                f"\n[Error starting process after {elapsed_s:.1f}s: {e}]\n" + "=" * 68 + "\n"
+            )
         finally:
             self.root.after(0, lambda: self.run_btn.config(state="normal"))
 
@@ -253,6 +333,495 @@ class SerpLauncherApp:
             self.ai_query_alts_chk.state(["disabled"])
         else:
             self.ai_query_alts_chk.state(["!disabled"])
+
+    def open_domain_override_review(self):
+        paths = load_config_paths()
+        json_path = os.path.join(os.getcwd(), paths["json"])
+        overrides_path = os.path.join(os.getcwd(), paths["overrides"])
+        started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log("\n" + "=" * 68 + "\n")
+        self.log(f"[{started_at}] Starting: 6. Review Domain Override Candidates\n")
+        self.log(f"> JSON source: {json_path}\n")
+        self.log(f"> Overrides file: {overrides_path}\n")
+        self.log("-" * 68 + "\n")
+
+        try:
+            data = load_json(json_path)
+            overrides = load_overrides(overrides_path)
+            classifier = EntityClassifier(override_file=overrides_path)
+            candidates = collect_candidates(
+                data,
+                overrides,
+                classifier,
+                min_rows=4,
+                min_keywords=2,
+            )
+            high_confidence, needs_judgment = split_candidates(candidates)
+            self.log(
+                f"Loaded {len(candidates)} candidates "
+                f"({len(high_confidence)} high-confidence, {len(needs_judgment)} needs judgment).\n"
+            )
+            if not candidates:
+                self.log("No domain override candidates found.\n")
+                self.log(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Process finished with status SUCCESS (elapsed: 0.0s)\n" + "=" * 68 + "\n")
+                messagebox.showinfo("Domain Override Review", "No domain override candidates were found in the current analysis.")
+                return
+            self.show_domain_override_review_window(
+                candidates=candidates,
+                high_confidence=high_confidence,
+                overrides_path=overrides_path,
+            )
+            self.log("Opened checklist review window.\n")
+            self.log(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Process finished with status SUCCESS (elapsed: 0.0s)\n" + "=" * 68 + "\n")
+        except Exception as exc:
+            self.log(f"Error: {exc}\n")
+            self.log(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Process finished with status ERROR (elapsed: 0.0s)\n" + "=" * 68 + "\n")
+            messagebox.showerror("Domain Override Review", str(exc))
+
+    def open_domain_override_review_after_pipeline(self):
+        paths = load_config_paths()
+        json_path = os.path.join(os.getcwd(), paths["json"])
+        overrides_path = os.path.join(os.getcwd(), paths["overrides"])
+        try:
+            data = load_json(json_path)
+            overrides = load_overrides(overrides_path)
+            classifier = EntityClassifier(override_file=overrides_path)
+            candidates = collect_candidates(
+                data,
+                overrides,
+                classifier,
+                min_rows=4,
+                min_keywords=2,
+            )
+            if not candidates:
+                self.log("No domain override candidates found after pipeline completion.\n")
+                return
+            self.log("Full pipeline completed. Opening domain override review before content opportunities.\n")
+            high_confidence, _needs_judgment = split_candidates(candidates)
+            self.show_domain_override_review_window(
+                candidates=candidates,
+                high_confidence=high_confidence,
+                overrides_path=overrides_path,
+            )
+        except Exception as exc:
+            self.log(f"Unable to auto-open domain review after pipeline: {exc}\n")
+
+    def show_domain_override_review_window(self, candidates, high_confidence, overrides_path):
+        if self.domain_review_window and self.domain_review_window.winfo_exists():
+            self.domain_review_window.destroy()
+
+        self.domain_review_rows = []
+        high_conf_domains = {item["domain"] for item in high_confidence}
+
+        window = tk.Toplevel(self.root)
+        window.title("Domain Override Candidate Review")
+        window.geometry("980x640")
+        window.transient(self.root)
+        self.domain_review_window = window
+
+        header = ttk.Frame(window)
+        header.pack(fill="x", padx=12, pady=12)
+        ttk.Label(
+            header,
+            text="Review candidate domains and check the ones you want to approve into domain_overrides.yml.",
+            wraplength=860,
+        ).pack(side="left", fill="x", expand=True)
+
+        controls = ttk.Frame(window)
+        controls.pack(fill="x", padx=12, pady=(0, 8))
+        ttk.Button(
+            controls,
+            text="Refresh Candidates",
+            command=self.open_domain_override_review,
+        ).pack(side="left", padx=(0, 12))
+        ttk.Button(
+            controls,
+            text="Check High-Confidence",
+            command=lambda: self.set_domain_review_selection(mode="high_confidence"),
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls,
+            text="Check All",
+            command=lambda: self.set_domain_review_selection(mode="all"),
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls,
+            text="Clear All",
+            command=lambda: self.set_domain_review_selection(mode="none"),
+        ).pack(side="left", padx=(0, 6))
+
+        legend = ttk.LabelFrame(window, text="Category Colors")
+        legend.pack(fill="x", padx=12, pady=(0, 8))
+        for idx, entity_type in enumerate(ENTITY_TYPES):
+            chip = tk.Label(
+                legend,
+                text=f" {entity_type} ",
+                bg=self.DOMAIN_REVIEW_TAG_STYLES[entity_type]["background"],
+                padx=6,
+                pady=2,
+                relief="groove",
+                borderwidth=1,
+            )
+            chip.grid(row=idx // 4, column=idx % 4, padx=6, pady=4, sticky="w")
+
+        columns = ("approve", "domain", "type", "confidence", "rows", "keywords", "best_rank", "section", "titles")
+        tree_frame = ttk.Frame(window)
+        tree_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=18)
+        tree.heading("approve", text="Approve")
+        tree.heading("domain", text="Domain")
+        tree.heading("type", text="Suggested Type")
+        tree.heading("confidence", text="Confidence")
+        tree.heading("rows", text="Rows")
+        tree.heading("keywords", text="Keywords")
+        tree.heading("best_rank", text="Best Rank")
+        tree.heading("section", text="Group")
+        tree.heading("titles", text="Sample Titles")
+
+        tree.column("approve", width=75, anchor="center")
+        tree.column("domain", width=190)
+        tree.column("type", width=120, anchor="center")
+        tree.column("confidence", width=90, anchor="center")
+        tree.column("rows", width=60, anchor="center")
+        tree.column("keywords", width=70, anchor="center")
+        tree.column("best_rank", width=75, anchor="center")
+        tree.column("section", width=130, anchor="center")
+        tree.column("titles", width=320)
+        for tag_name, style in self.DOMAIN_REVIEW_TAG_STYLES.items():
+            tree.tag_configure(tag_name, **style)
+
+        scrollbar_y = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        scrollbar_x = ttk.Scrollbar(tree_frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar_y.grid(row=0, column=1, sticky="ns")
+        scrollbar_x.grid(row=1, column=0, sticky="ew")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        ordered_candidates = sorted(
+            candidates,
+            key=lambda item: (
+                0 if item["domain"] in high_conf_domains else 1,
+                -(item["source_keyword_count"]),
+                -(item["organic_rows"]),
+                item["domain"],
+            ),
+        )
+
+        for item in ordered_candidates:
+            selected = item["domain"] in high_conf_domains
+            var = tk.BooleanVar(value=selected)
+            item["selected_type"] = item.get("selected_type") or item["suggested_type"]
+            section = "High-confidence" if selected else "Needs judgment"
+            titles = "; ".join(item["sample_titles"])
+            item_id = tree.insert(
+                "",
+                "end",
+                values=(
+                    "Yes" if selected else "No",
+                    item["domain"],
+                    item["selected_type"],
+                    f"{item['confidence']:.1f}",
+                    item["organic_rows"],
+                    item["source_keyword_count"],
+                    item["best_rank"] or "-",
+                    section,
+                    titles,
+                ),
+                tags=(self.domain_review_row_tag(item["selected_type"]),),
+            )
+            self.domain_review_rows.append({
+                "tree_id": item_id,
+                "variable": var,
+                "candidate": item,
+                "initial_high_confidence": selected,
+                "is_high_confidence": selected,
+            })
+
+        tree.bind("<Double-1>", self.on_domain_review_toggle)
+        tree.bind("<space>", self.on_domain_review_toggle)
+        tree.bind("<<TreeviewSelect>>", self.on_domain_review_select)
+        tree.bind("<Button-1>", self.on_domain_review_click)
+        self.domain_review_tree = tree
+
+        detail = ttk.LabelFrame(window, text="Selected Domain")
+        detail.pack(fill="x", padx=12, pady=(0, 8))
+        detail.columnconfigure(1, weight=1)
+        ttk.Label(detail, text="Domain:").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        self.domain_detail_domain_var = tk.StringVar(value="Select a row")
+        ttk.Label(detail, textvariable=self.domain_detail_domain_var).grid(
+            row=0, column=1, sticky="w", padx=8, pady=6
+        )
+        ttk.Label(detail, text="Suggested:").grid(row=1, column=0, sticky="w", padx=8, pady=6)
+        self.domain_detail_suggested_var = tk.StringVar(value="-")
+        ttk.Label(detail, textvariable=self.domain_detail_suggested_var).grid(
+            row=1, column=1, sticky="w", padx=8, pady=6
+        )
+        ttk.Label(detail, text="Override Type:").grid(row=2, column=0, sticky="w", padx=8, pady=6)
+        self.domain_detail_type_var = tk.StringVar(value="")
+        self.domain_detail_type_combo = ttk.Combobox(
+            detail,
+            textvariable=self.domain_detail_type_var,
+            values=ENTITY_TYPES,
+            state="readonly",
+            width=28,
+        )
+        self.domain_detail_type_combo.grid(row=2, column=1, sticky="w", padx=8, pady=6)
+        self.domain_detail_type_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self.domain_detail_description_var.set(
+                ENTITY_TYPE_DESCRIPTIONS.get(self.domain_detail_type_var.get(), "-")
+            ),
+        )
+        ttk.Button(
+            detail,
+            text="Set Category For Selected Row",
+            command=self.apply_domain_review_category,
+        ).grid(row=2, column=2, sticky="w", padx=8, pady=6)
+        ttk.Label(detail, text="Meaning:").grid(row=3, column=0, sticky="nw", padx=8, pady=6)
+        self.domain_detail_description_var = tk.StringVar(value="-")
+        ttk.Label(
+            detail,
+            textvariable=self.domain_detail_description_var,
+            wraplength=700,
+            justify="left",
+        ).grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=6)
+
+        if self.domain_review_rows:
+            first_id = self.domain_review_rows[0]["tree_id"]
+            tree.selection_set(first_id)
+            tree.focus(first_id)
+            self.on_domain_review_select()
+
+        footer = ttk.Frame(window)
+        footer.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(
+            footer,
+            text="Approve Checked",
+            command=lambda: self.apply_selected_domain_overrides(overrides_path),
+        ).pack(side="right")
+        ttk.Button(
+            footer,
+            text="Close",
+            command=window.destroy,
+        ).pack(side="right", padx=(0, 8))
+
+    def on_domain_review_toggle(self, event=None):
+        if not getattr(self, "domain_review_tree", None):
+            return
+        selection = self.domain_review_tree.selection()
+        if not selection:
+            return
+        selected_id = selection[0]
+        for row in self.domain_review_rows:
+            if row["tree_id"] == selected_id:
+                row["variable"].set(not row["variable"].get())
+                self.refresh_domain_review_row(row)
+                break
+
+    def on_domain_review_click(self, event):
+        if not getattr(self, "domain_review_tree", None):
+            return
+        self.destroy_inline_type_editor()
+        row_id = self.domain_review_tree.identify_row(event.y)
+        column_id = self.domain_review_tree.identify_column(event.x)
+        if not row_id or not column_id:
+            return
+
+        self.domain_review_tree.selection_set(row_id)
+        self.domain_review_tree.focus(row_id)
+        self.on_domain_review_select()
+
+        if column_id == "#1":
+            for row in self.domain_review_rows:
+                if row["tree_id"] == row_id:
+                    row["variable"].set(not row["variable"].get())
+                    self.refresh_domain_review_row(row)
+                    return "break"
+
+        if column_id == "#3":
+            self.open_inline_type_editor(row_id)
+            return "break"
+
+        return None
+
+    def on_domain_review_select(self, event=None):
+        if not getattr(self, "domain_review_tree", None):
+            return
+        selection = self.domain_review_tree.selection()
+        if not selection:
+            self.domain_review_selected_row = None
+            return
+        selected_id = selection[0]
+        for row in self.domain_review_rows:
+            if row["tree_id"] == selected_id:
+                self.domain_review_selected_row = row
+                candidate = row["candidate"]
+                chosen_type = candidate.get("selected_type") or candidate["suggested_type"]
+                self.domain_detail_domain_var.set(candidate["domain"])
+                self.domain_detail_suggested_var.set(
+                    f"{candidate['suggested_type']} ({candidate['confidence']:.1f})"
+                )
+                self.domain_detail_type_var.set(chosen_type)
+                self.domain_detail_description_var.set(
+                    ENTITY_TYPE_DESCRIPTIONS.get(chosen_type, "-")
+                )
+                break
+
+    def apply_domain_review_category(self):
+        if not self.domain_review_selected_row:
+            messagebox.showinfo("Domain Override Review", "Select a row first.")
+            return
+        chosen_type = self.domain_detail_type_var.get().strip()
+        if chosen_type not in ENTITY_TYPES:
+            messagebox.showerror("Domain Override Review", "Choose a valid entity type.")
+            return
+        row = self.domain_review_selected_row
+        row["candidate"]["selected_type"] = chosen_type
+        row["variable"].set(True)
+        row["is_high_confidence"] = (
+            row["initial_high_confidence"]
+            and row["candidate"]["suggested_type"] == chosen_type
+        )
+        self.domain_detail_description_var.set(ENTITY_TYPE_DESCRIPTIONS[chosen_type])
+        self.refresh_domain_review_row(row)
+        self.destroy_inline_type_editor()
+
+    def refresh_domain_review_row(self, row):
+        section = "High-confidence" if row["is_high_confidence"] else "Needs judgment"
+        candidate = row["candidate"]
+        self.domain_review_tree.item(
+            row["tree_id"],
+            values=(
+                "Yes" if row["variable"].get() else "No",
+                candidate["domain"],
+                candidate.get("selected_type") or candidate["suggested_type"],
+                f"{candidate['confidence']:.1f}",
+                candidate["organic_rows"],
+                candidate["source_keyword_count"],
+                candidate["best_rank"] or "-",
+                section,
+                "; ".join(candidate["sample_titles"]),
+            ),
+            tags=(self.domain_review_row_tag(candidate.get("selected_type") or candidate["suggested_type"]),),
+        )
+
+    def open_inline_type_editor(self, row_id):
+        bbox = self.domain_review_tree.bbox(row_id, "#3")
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        row = next((item for item in self.domain_review_rows if item["tree_id"] == row_id), None)
+        if not row:
+            return
+
+        current_type = row["candidate"].get("selected_type") or row["candidate"]["suggested_type"]
+        editor_var = tk.StringVar(value=current_type)
+        editor = ttk.Combobox(
+            self.domain_review_tree,
+            textvariable=editor_var,
+            values=ENTITY_TYPES,
+            state="readonly",
+            width=max(12, int(width / 9)),
+        )
+        editor.place(x=x, y=y, width=width, height=height)
+        editor.focus_set()
+
+        def commit_inline_edit(_event=None):
+            row["candidate"]["selected_type"] = editor_var.get().strip()
+            row["variable"].set(True)
+            row["is_high_confidence"] = (
+                row["initial_high_confidence"]
+                and row["candidate"]["suggested_type"] == row["candidate"]["selected_type"]
+            )
+            if self.domain_review_selected_row and self.domain_review_selected_row["tree_id"] == row_id:
+                self.domain_detail_type_var.set(row["candidate"]["selected_type"])
+                self.domain_detail_description_var.set(
+                    ENTITY_TYPE_DESCRIPTIONS.get(row["candidate"]["selected_type"], "-")
+                )
+            self.refresh_domain_review_row(row)
+            self.destroy_inline_type_editor()
+
+        editor.bind("<<ComboboxSelected>>", commit_inline_edit)
+        editor.bind("<Return>", commit_inline_edit)
+        editor.bind("<Escape>", lambda _event: self.destroy_inline_type_editor())
+        editor.bind("<FocusOut>", lambda _event: self.destroy_inline_type_editor())
+        self.inline_type_editor = editor
+        editor.event_generate("<Button-1>")
+
+    def destroy_inline_type_editor(self):
+        if self.inline_type_editor is not None:
+            try:
+                self.inline_type_editor.destroy()
+            except Exception:
+                pass
+            self.inline_type_editor = None
+
+    def domain_review_row_tag(self, entity_type):
+        tag = (entity_type or "").strip() or "unknown"
+        return tag if tag in self.DOMAIN_REVIEW_TAG_STYLES else "unknown"
+
+    def set_domain_review_selection(self, mode):
+        for row in self.domain_review_rows:
+            if mode == "all":
+                row["variable"].set(True)
+            elif mode == "none":
+                row["variable"].set(False)
+            elif mode == "high_confidence":
+                row["variable"].set(row["is_high_confidence"])
+            self.refresh_domain_review_row(row)
+
+    def apply_selected_domain_overrides(self, overrides_path):
+        selected_candidates = [
+            {
+                **row["candidate"],
+                "selected_type": row["candidate"].get("selected_type") or row["candidate"]["suggested_type"],
+            }
+            for row in self.domain_review_rows
+            if row["variable"].get()
+        ]
+        if not selected_candidates:
+            messagebox.showinfo("Domain Override Review", "No domains are checked.")
+            return
+
+        existing_overrides = load_overrides(overrides_path)
+        merged_overrides, added, skipped = merge_overrides(existing_overrides, selected_candidates)
+        write_overrides(overrides_path, merged_overrides)
+
+        paths = load_config_paths()
+        refresh_result = refresh_analysis_outputs(
+            json_path=os.path.join(os.getcwd(), paths["json"]),
+            xlsx_path=os.path.join(os.getcwd(), paths["xlsx"]),
+            overrides_path=overrides_path,
+            candidates_report_path=os.path.join(os.getcwd(), paths["candidates_report"]),
+        )
+
+        self.log(f"Approved {len(selected_candidates)} checked candidates.\n")
+        self.log(f"Added {len(added)} overrides to {overrides_path}.\n")
+        for domain, entity_type in added:
+            self.log(f"  + {domain}: {entity_type}\n")
+        for domain, entity_type, reason in skipped:
+            self.log(f"  = {domain}: {entity_type} ({reason})\n")
+        self.log(
+            "Refreshed local analysis outputs after override approval: "
+            f"JSON changed {refresh_result['json_changed']} rows, "
+            f"XLSX changed {refresh_result['xlsx_changed']} rows, "
+            f"remaining candidates {refresh_result['candidate_count']}.\n"
+        )
+        self.log("You can run List Content Opportunities against the refreshed analysis now.\n")
+
+        messagebox.showinfo(
+            "Domain Override Review",
+            "Updated overrides and refreshed analysis files.\n\n"
+            f"Added: {len(added)}\n"
+            f"Skipped existing: {len(skipped)}\n"
+            f"JSON rows changed: {refresh_result['json_changed']}\n"
+            f"XLSX rows changed: {refresh_result['xlsx_changed']}",
+        )
+        if self.domain_review_window and self.domain_review_window.winfo_exists():
+            self.domain_review_window.destroy()
 
 
 if __name__ == "__main__":

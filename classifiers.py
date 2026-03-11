@@ -5,6 +5,28 @@ Rules-based classifiers for Content Type (URL/Page level) and Entity Type (Domai
 import os
 import yaml
 
+ENTITY_TYPES = [
+    "counselling",
+    "legal",
+    "directory",
+    "nonprofit",
+    "government",
+    "media",
+    "professional_association",
+    "education",
+]
+
+ENTITY_TYPE_DESCRIPTIONS = {
+    "counselling": "Direct counselling or therapy service providers.",
+    "legal": "Law firms, legal services, or legal information sources.",
+    "directory": "Practitioner directories and listing platforms.",
+    "nonprofit": "Nonprofit or charity organizations.",
+    "government": "Government sites and public-sector service sources.",
+    "media": "Editorial, social, video, book, or news/media platforms.",
+    "professional_association": "Associations, colleges, and regulatory bodies.",
+    "education": "Universities, colleges, and research institutions.",
+}
+
 
 class ContentClassifier:
     def classify(self, url, soup, headers):
@@ -18,17 +40,17 @@ class ContentClassifier:
         if url.lower().endswith('.pdf') or (headers and 'application/pdf' in headers.get('Content-Type', '')):
             return 'pdf', 1.0, ["url_extension_or_header"]
 
-        if not soup:
-            return 'unknown', 0.0, ["no_content"]
-
-        text = soup.get_text(" ", strip=True).lower()
-        title = soup.title.string.lower() if soup.title and soup.title.string else ""
-
         # 2. Directory / Listing (High Confidence)
         # URL patterns
         if any(x in url.lower() for x in ['/directory/', '/list/', '/find-', '/best-', '-near-me']):
             evidence.append("url_pattern_directory")
             return 'directory', 0.8, evidence
+
+        if not soup:
+            return 'unknown', 0.0, ["no_content"]
+
+        text = soup.get_text(" ", strip=True).lower()
+        title = soup.title.string.lower() if soup.title and soup.title.string else ""
 
         # Content patterns for directories
         if "top 10" in title or ("best " in title and " in " in title):
@@ -80,25 +102,76 @@ class EntityClassifier:
         Returns: (entity_type, confidence, evidence_list)
         """
         evidence = []
+        domain_l = (domain or "").lower()
+        text = soup.get_text(" ", strip=True).lower() if soup else ""
 
         # 0. Manual Override
         if domain in self.overrides:
             return self.overrides[domain], 1.0, ["manual_override"]
+        if domain_l in self.overrides:
+            return self.overrides[domain_l], 1.0, ["manual_override"]
 
         # 1. TLD Signals
-        if domain.endswith('.gov') or domain.endswith('.gc.ca'):
+        if (
+            domain_l.endswith('.gov')
+            or '.gov.' in domain_l
+            or domain_l.endswith('.gc.ca')
+            or domain_l.endswith('canada.ca')
+        ):
             return 'government', 1.0, ["tld_gov"]
-        if domain.endswith('.edu'):
+        if domain_l.endswith('.edu') or any(d in domain_l for d in ["ubc.ca", "sfu.ca"]):
             return 'education', 1.0, ["tld_edu"]
-        if domain.endswith('.org'):
+        if domain_l.endswith('.org'):
             evidence.append("tld_org")  # Weak signal, need more
+
+        # 2. Directory Signals (Domain level)
+        directory_domains = [
+            "yelp.ca",
+            "yellowpages.ca",
+            "psychologytoday.com",
+            "healthgrades.com",
+            "counsellingbc.com",
+            "therapytribe.com",
+            "theravive.com",
+            "firstsession.com",
+            "luminohealth.sunlife.ca",
+            "ratemds.com",
+        ]
+        if any(d in domain_l for d in directory_domains):
+            return 'directory', 0.9, ["known_directory_domain"]
+
+        professional_association_domains = [
+            "bcacc.ca",
+        ]
+        if any(d in domain_l for d in professional_association_domains):
+            return 'professional_association', 0.95, ["known_professional_association_domain"]
+
+        media_domains = [
+            "reddit.com",
+            "youtube.com",
+            "amazon.ca",
+            "cbc.ca",
+            "vancouversun.com",
+            "canadianaffairs.news",
+        ]
+        if any(d in domain_l for d in media_domains):
+            return 'media', 0.9, ["known_media_domain"]
+
+        legal_terms = ["law", "legal", "lawyer", "lawyers", "attorney", "attorneys", "estate", "litigation"]
+        if any(term in domain_l for term in legal_terms):
+            return 'legal', 0.85, ["domain_legal_pattern"]
+
+        counselling_terms = [
+            "counselling", "counseling", "therapy", "therapist",
+            "psychology", "psychotherapy", "mentalhealth", "wellness",
+        ]
+        if any(term in domain_l for term in counselling_terms):
+            return 'counselling', 0.8, ["domain_counselling_pattern"]
 
         if not soup:
             if "tld_org" in evidence:
                 return 'nonprofit', 0.6, evidence
-            return 'commercial', 0.4, ["fallback_no_content"]
-
-        text = soup.get_text(" ", strip=True).lower()
+            return 'N/A', 0.0, ["fallback_no_content"]
 
         # 2. Nonprofit Signals
         nonprofit_keywords = ["registered charity",
@@ -107,11 +180,17 @@ class EntityClassifier:
             evidence.append("nonprofit_keywords")
             return 'nonprofit', 0.8, evidence
 
-        # 3. Directory Signals (Domain level)
-        directory_domains = ["yelp.ca", "yellowpages.ca",
-                             "psychologytoday.com", "healthgrades.com"]
-        if any(d in domain for d in directory_domains):
-            return 'directory', 0.9, ["known_directory_domain"]
+        association_keywords = [
+            "professional association", "regulatory body", "college of",
+            "registered clinical counsellors association", "licensing body",
+        ]
+        if any(k in text[:5000] for k in association_keywords):
+            return 'professional_association', 0.8, ["association_keywords"]
 
-        # 4. Commercial (Default)
-        return 'commercial', 0.5, ["fallback"]
+        if any(k in text[:5000] for k in ["lawyer", "law firm", "family law", "legal advice", "custody", "estate planning"]):
+            return 'legal', 0.75, ["legal_keywords"]
+
+        if any(k in text[:5000] for k in ["counselling", "counseling", "therapy", "psychotherapy", "book appointment", "registered clinical counsellor"]):
+            return 'counselling', 0.7, ["counselling_keywords"]
+
+        return 'N/A', 0.0, ["fallback_unknown"]

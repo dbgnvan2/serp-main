@@ -5,7 +5,7 @@ Orchestrates the full SERP audit pipeline:
 1. Run Audit (Fetch + Enrich + Store)
 2. Validate Output (XLSX vs JSON)
 3. Verify DB Enrichment
-4. Generate/Check Report
+4. Generate Domain Override Review Candidates
 """
 import subprocess
 import sys
@@ -54,11 +54,23 @@ def main():
     run_command([sys.executable, "verify_enrichment.py"],
                 "Step 3: DB Enrichment Verification")
 
+    # 4. Generate Domain Override Review Candidates
+    if os.path.exists(json_file):
+        run_command([
+            sys.executable, "generate_domain_override_candidates.py",
+            "--json", json_file,
+            "--overrides", files_cfg.get("domain_overrides", "domain_overrides.yml"),
+            "--out", "domain_override_candidates.md",
+        ], "Step 4: Domain Override Candidate Report")
+    else:
+        print("⚠️ Skipping domain override candidate report: JSON output not found.")
+
     print("\n🎉 Pipeline Finished Successfully!")
     print(f"   - Report: market_analysis_v2.md")
     print(f"   - Excel:  {xlsx_file}")
     print(f"   - JSON:   {json_file}")
     print(f"   - DB:     serp_data.db")
+    print(f"   - Override Candidates: domain_override_candidates.md")
 
 
 if __name__ == "__main__":

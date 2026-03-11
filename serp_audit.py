@@ -1424,6 +1424,12 @@ def main():
                         except (ValueError, TypeError):
                             rank_val = 99
 
+                        # Classify every domain even when we skip HTML fetching for lower ranks.
+                        # This avoids treating "not enriched" as "unclassified" in downstream reports.
+                        e_type, e_conf, e_ev = entity_classifier.classify(domain, None)
+                        item['Entity_Type'] = e_type
+                        storage.save_domain_features(domain, e_type)
+
                         if rank_val <= MAX_URLS_TO_ENRICH:
                             fetch_res = enricher.fetch_url(url)
                             if fetch_res:

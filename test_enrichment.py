@@ -92,11 +92,31 @@ class TestClassifiers(unittest.TestCase):
         self.assertEqual(c_type, "directory")
         self.assertIn("known_directory_domain", ev)
 
-    def test_entity_commercial_fallback(self):
-        """Test fallback to commercial."""
+    def test_entity_unknown_fallback(self):
+        """Test fallback to unclassified when no strong domain signal exists."""
         c_type, conf, ev = self.entity_classifier.classify(
             "www.private-practice.com", None)
-        self.assertEqual(c_type, "commercial")
+        self.assertEqual(c_type, "N/A")
+
+    def test_entity_counselling_domain(self):
+        """Test direct counselling provider classification from domain pattern."""
+        c_type, conf, ev = self.entity_classifier.classify(
+            "www.willowtreecounselling.ca", None)
+        self.assertEqual(c_type, "counselling")
+        self.assertIn("domain_counselling_pattern", ev)
+
+    def test_entity_professional_association_domain(self):
+        """Test known professional association domains."""
+        c_type, conf, ev = self.entity_classifier.classify("bcacc.ca", None)
+        self.assertEqual(c_type, "professional_association")
+        self.assertIn("known_professional_association_domain", ev)
+
+    def test_entity_legal_domain(self):
+        """Test legal classification from domain pattern."""
+        c_type, conf, ev = self.entity_classifier.classify(
+            "macleanfamilylaw.ca", None)
+        self.assertEqual(c_type, "legal")
+        self.assertIn("domain_legal_pattern", ev)
 
 
 if __name__ == '__main__':
