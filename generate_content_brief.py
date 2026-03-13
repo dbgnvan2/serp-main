@@ -51,6 +51,14 @@ DEFAULT_CLIENT_CONTEXT = {
     ],
 }
 
+SUPPORTED_REPORT_MODELS = [
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-6",
+    "claude-opus-4-1-20250805",
+    "claude-opus-4-20250514",
+    "claude-3-7-sonnet-20250219",
+]
+
 MAIN_REPORT_PROMPT_DEFAULT = os.path.join("prompts", "main_report")
 ADVISORY_PROMPT_DEFAULT = os.path.join("prompts", "advisory")
 CORRECTION_PROMPT_DEFAULT = os.path.join("prompts", "correction", "user_template.md")
@@ -1098,6 +1106,27 @@ def run_llm_report(system_prompt, user_prompt, model, max_tokens, prior_response
     return "\n".join(chunks).strip()
 
 
+def _mixed_keyword_dominance_profiles(extracted_data):
+    profiles = []
+    for keyword, profile in (extracted_data.get("keyword_profiles", {}) or {}).items():
+        distribution = profile.get("entity_distribution", {}) or {}
+        ranked = sorted(
+            [(entity, count) for entity, count in distribution.items() if count],
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if len(ranked) < 2:
+            continue
+        (top_entity, top_count), (_second_entity, second_count) = ranked[:2]
+        classified_total = sum(count for _entity, count in ranked)
+        if classified_total <= 0:
+            continue
+        top_share = top_count / classified_total
+        if second_count >= 3 and top_share <= 0.60:
+            profiles.append((keyword, top_entity, top_count, second_count, top_share))
+    return profiles
+
+
 def validate_llm_report(report_text, extracted_data):
     issues = []
     report_l = _normalize_text(report_text)
@@ -1187,6 +1216,20 @@ def validate_llm_report(report_text, extracted_data):
                 "Report labels the broad estrangement landscape as counselling-dominant despite a mixed legal and counselling entity distribution."
             )
 
+    for keyword, top_entity, top_count, second_count, top_share in _mixed_keyword_dominance_profiles(extracted_data):
+        section_match = re.search(
+            rf"\*\*{re.escape(keyword)} \([^\n]+\)\*\*(.*?)(?:\n\n\*\*|\n### |\Z)",
+            report_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not section_match:
+            continue
+        section_text = section_match.group(1)
+        if re.search(rf"\b{re.escape(top_entity)} (?:entities )?(?:heavily )?dominat", section_text, flags=re.IGNORECASE):
+            issues.append(
+                f"Report labels '{keyword}' as {top_entity}-dominant, but the classified entity mix is too close ({top_count} vs {second_count}; {top_share:.0%} share) and should be described as mixed or contested."
+            )
+
     return issues
 
 
@@ -1240,6 +1283,11 @@ def validate_advisory_briefing(report_text, extracted_data):
             issues.append(
                 "Advisory briefing overstates broad estrangement as counselling-dominant despite mixed legal and counselling signals."
             )
+
+    if re.search(r"eliminate your digital presence entirely|complete loss of (?:your )?digital presence", report_l):
+        issues.append(
+            "Advisory briefing overstates the consequence scope beyond measured search visibility."
+        )
 
     return issues
 

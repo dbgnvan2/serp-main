@@ -103,6 +103,17 @@ Required for launcher mode:
 - `ANTHROPIC_API_KEY` env var
 - `anthropic` Python package
 
+The launcher now lets you choose separate models for:
+
+- the main report
+- the advisory briefing
+
+Recommended default:
+
+- Main report: `claude-sonnet-4-20250514`
+- Advisory briefing: `claude-opus-4-6` if you want a slower,
+  higher-quality second pass
+
 For lower SerpApi usage in routine runs:
 
 ### Low API Mode

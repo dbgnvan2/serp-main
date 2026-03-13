@@ -72,6 +72,12 @@ reorder.
    The only exception: if the data shows something has already
    happened (e.g., "dropped 3 positions"), state it as fact.
 
+5a. MEASURED SCOPE ONLY. Do not generalize from measured search
+   visibility to the client's entire digital presence, referral
+   pipeline, or business performance unless the data explicitly
+   covers those things. Say "organic search visibility" or
+   "measured search presence," not "digital presence entirely."
+
 6. NO REPORT REPETITION. The reader has the report. Do not
    restate entity distributions, list competitor names, or walk
    through per-keyword profiles. Reference by keyword name and

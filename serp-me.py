@@ -38,6 +38,13 @@ class SerpLauncherApp:
         "education": {"background": "#f1f8e9"},
         "unknown": {"background": "#f5f5f5"},
     }
+    REPORT_MODEL_OPTIONS = [
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-6",
+        "claude-opus-4-1-20250805",
+        "claude-opus-4-20250514",
+        "claude-3-7-sonnet-20250219",
+    ]
 
     def __init__(self, root):
         self.root = root
@@ -204,6 +211,28 @@ class SerpLauncherApp:
             variable=self.deep_research_mode_var,
         )
         self.deep_research_mode_chk.pack(side="left", padx=5)
+
+        model_frame = ttk.Frame(root)
+        model_frame.pack(fill="x", padx=20, pady=(0, 6))
+        ttk.Label(model_frame, text="Main Report Model:").pack(side="left", padx=(0, 6))
+        self.main_model_var = tk.StringVar(value=self.REPORT_MODEL_OPTIONS[0])
+        self.main_model_combo = ttk.Combobox(
+            model_frame,
+            textvariable=self.main_model_var,
+            values=self.REPORT_MODEL_OPTIONS,
+            width=28,
+        )
+        self.main_model_combo.pack(side="left", padx=(0, 12))
+
+        ttk.Label(model_frame, text="Advisory Model:").pack(side="left", padx=(0, 6))
+        self.advisory_model_var = tk.StringVar(value=self.REPORT_MODEL_OPTIONS[0])
+        self.advisory_model_combo = ttk.Combobox(
+            model_frame,
+            textvariable=self.advisory_model_var,
+            values=self.REPORT_MODEL_OPTIONS,
+            width=28,
+        )
+        self.advisory_model_combo.pack(side="left")
 
         keyword_file_frame = ttk.Frame(root)
         keyword_file_frame.pack(fill="x", padx=20, pady=(0, 4))
@@ -484,6 +513,8 @@ class SerpLauncherApp:
 
         cmd = [sys.executable, script_info["file"]]
         if script_info["file"] == "generate_content_brief.py":
+            main_model = self.main_model_var.get().strip() or self.REPORT_MODEL_OPTIONS[0]
+            advisory_model = self.advisory_model_var.get().strip() or main_model
             cmd.extend([
                 "--json", run_context["input_json"],
                 "--list",
@@ -491,6 +522,8 @@ class SerpLauncherApp:
                 "--advisory-briefing",
                 "--advisory-out", output_names["advisory_out"],
                 "--prompt-spec", os.path.join("prompts", "main_report"),
+                "--llm-model", main_model,
+                "--advisory-model", advisory_model,
                 "--use-llm",
             ])
         else:

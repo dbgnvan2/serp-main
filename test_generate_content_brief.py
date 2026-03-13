@@ -200,6 +200,28 @@ This may indicate a data collection issue.
         )
         self.assertTrue(any("monthly search volume" in issue.lower() for issue in issues))
 
+    def test_validate_llm_report_flags_mixed_keyword_dominance(self):
+        extracted = {
+            "queries": [],
+            "autocomplete_summary": {"trigger_word_hits": {}},
+            "tool_recommendations_verified": [],
+            "keyword_profiles": {
+                "estrangement from adult children": {
+                    "entity_distribution": {
+                        "counselling": 6,
+                        "legal": 4,
+                        "directory": 1,
+                    }
+                }
+            },
+        }
+        report = """
+**estrangement from adult children (16,400 total results)**
+Counselling entities dominate this landscape, with legal entities secondary.
+"""
+        issues = gcb.validate_llm_report(report, extracted)
+        self.assertTrue(any("too close" in issue.lower() for issue in issues))
+
     def test_validate_advisory_briefing_flags_overconfident_language(self):
         extracted = gcb.extract_analysis_data_from_json(
             self._sample_data(), "livingsystems.ca", ["Living Systems"]
@@ -223,6 +245,16 @@ If you don't act now, you'll lose your rank #3 position entirely.
         issues = gcb.validate_advisory_briefing(bad_advisory, extracted)
         self.assertTrue(any("first action" in issue.lower() for issue in issues))
         self.assertTrue(any("certainty language" in issue.lower() for issue in issues))
+
+    def test_validate_advisory_briefing_flags_scope_overstatement(self):
+        extracted = gcb.extract_analysis_data_from_json(
+            self._sample_data(), "livingsystems.ca", ["Living Systems"]
+        )
+        issues = gcb.validate_advisory_briefing(
+            "Further decline could eliminate your digital presence entirely.",
+            extracted,
+        )
+        self.assertTrue(any("consequence scope" in issue.lower() for issue in issues))
 
     def test_parse_trigger_words_handles_lists(self):
         parsed = gcb._parse_trigger_words(["clinical", " registered ", "", None])

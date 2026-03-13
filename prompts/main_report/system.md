@@ -182,6 +182,13 @@ Never describe total_results as "monthly searches," "search
 volume," or "demand." Use "total indexed results," "estimated
 market scale," or "Google's result count estimate."
 
+RULE 11: DISTINGUISH EVIDENCE FROM CLIENT-ANGLE INFERENCE.
+If a recommendation comes directly from observed SERP behavior,
+label it as a SERP-evidenced demand gap. If it comes from the
+client's framework being different from current results, label it
+as a client differentiation hypothesis. Do not present a client
+angle hypothesis as if it were directly measured demand.
+
 ## Report Structure
 
 Write in prose paragraphs. Use tables only for genuinely tabular
@@ -233,7 +240,8 @@ results — but base this on what keyword_profiles.top5_organic
 actually shows, not on assumed competitor weaknesses. If a gap has
 no PAA question, cite autocomplete or related search evidence and
 label it as "inferred from autocomplete/related searches" rather
-than PAA-confirmed.
+than PAA-confirmed. For each gap, explicitly label whether it is a
+SERP-evidenced demand gap or a client differentiation hypothesis.
 
 ### Section 6: Tool Recommendation Assessment
 For each entry in tool_recommendations_verified, state: pattern
@@ -252,6 +260,8 @@ keyword with action != skip, state:
 - What specific content to create or update
 - Which PAA questions or autocomplete terms it should address
   (cite from the keyword's paa_questions list)
+- Whether the recommendation is primarily a SERP-evidenced demand
+  gap or a client differentiation hypothesis
 - What success looks like (rank improvement, AIO citation gain)
 - What to avoid (audience mismatch, competing with legal firms)
 Do not recommend content for skip keywords. Limit to 5
