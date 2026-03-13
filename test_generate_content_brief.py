@@ -129,6 +129,21 @@ class TestGenerateContentBrief(unittest.TestCase):
         warnings = gcb.validate_extraction({"root_keywords": [], "queries": []})
         self.assertGreaterEqual(len(warnings), 1)
 
+    def test_build_main_report_payload_is_compact_and_preserves_needed_fields(self):
+        extracted = gcb.extract_analysis_data_from_json(
+            self._sample_data(), "livingsystems.ca", ["Living Systems"]
+        )
+        payload = gcb.build_main_report_payload(extracted)
+        self.assertIn("keyword_profiles", payload)
+        self.assertIn("client_position", payload)
+        self.assertEqual(
+            payload["keyword_profiles"]["estrangement"]["entity_label"],
+            "dominated_by_nonprofit",
+        )
+        full_size = len(gcb.json.dumps(extracted, separators=(",", ":"), default=str))
+        payload_size = len(gcb.json.dumps(payload, separators=(",", ":"), default=str))
+        self.assertLess(payload_size, full_size)
+
     def test_generate_local_report_contains_sections(self):
         extracted = gcb.extract_analysis_data_from_json(
             self._sample_data(), "livingsystems.ca", ["Living Systems"]
