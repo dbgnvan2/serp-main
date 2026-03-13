@@ -117,6 +117,10 @@ class TestGenerateContentBrief(unittest.TestCase):
             0,
         )
         self.assertFalse(extracted["keyword_profiles"]["estrangement"]["has_local_pack"])
+        self.assertEqual(
+            extracted["keyword_profiles"]["estrangement"]["entity_label"],
+            "dominated_by_nonprofit",
+        )
         self.assertIn("estrangement", extracted["local_pack_summary"]["serp_local_pack_absent"])
         self.assertEqual(extracted["strategic_flags"]["visibility_concentration"], "critical")
         self.assertEqual(extracted["strategic_flags"]["content_priorities"][0]["action"], "strengthen")
@@ -200,6 +204,26 @@ This may indicate a data collection issue.
         )
         self.assertTrue(any("monthly search volume" in issue.lower() for issue in issues))
 
+    def test_validate_llm_report_flags_speculative_anomaly_language(self):
+        extracted = gcb.extract_analysis_data_from_json(
+            self._sample_data(), "livingsystems.ca", ["Living Systems"]
+        )
+        issues = gcb.validate_llm_report(
+            "AI Overview is present but returned 0 citations, indicating technical issues or content filtering.",
+            extracted,
+        )
+        self.assertTrue(any("speculative causal language" in issue.lower() for issue in issues))
+
+    def test_validate_llm_report_flags_aio_count_mismatch(self):
+        extracted = gcb.extract_analysis_data_from_json(
+            self._sample_data(), "livingsystems.ca", ["Living Systems"]
+        )
+        issues = gcb.validate_llm_report(
+            "0 of 1 queries feature AI Overviews.",
+            extracted,
+        )
+        self.assertTrue(any("queries have ai overviews" in issue.lower() for issue in issues))
+
     def test_validate_llm_report_flags_mixed_keyword_dominance(self):
         extracted = {
             "queries": [],
@@ -211,7 +235,8 @@ This may indicate a data collection issue.
                         "counselling": 6,
                         "legal": 4,
                         "directory": 1,
-                    }
+                    },
+                    "entity_label": "counselling_plurality",
                 }
             },
         }
@@ -259,6 +284,18 @@ If you don't act now, you'll lose your rank #3 position entirely.
     def test_parse_trigger_words_handles_lists(self):
         parsed = gcb._parse_trigger_words(["clinical", " registered ", "", None])
         self.assertEqual(parsed, ["clinical", "registered"])
+
+    def test_classify_entity_distribution_outputs_expected_labels(self):
+        dominant, label = gcb._classify_entity_distribution(
+            {"counselling": 6, "media": 6, "legal": 4, "directory": 3}
+        )
+        self.assertEqual(dominant, "counselling")
+        self.assertEqual(label, "mixed_counselling_legal_media")
+        dominant, label = gcb._classify_entity_distribution(
+            {"legal": 12, "counselling": 5, "government": 7}
+        )
+        self.assertEqual(dominant, "legal")
+        self.assertEqual(label, "legal_plurality")
 
     def test_write_validation_artifact_creates_markdown_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:

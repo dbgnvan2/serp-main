@@ -17,3 +17,11 @@ Recommended order:
 5. [`05_correction_prompt_iteration.md`](/Users/davemini2/ProjectsLocal/serp/prompt_iteration_packages/05_correction_prompt_iteration.md)
 
 Shared evidence lives in [`examples/`](/Users/davemini2/ProjectsLocal/serp/prompt_iteration_packages/examples).
+
+Notes:
+- The authoritative autocomplete evidence lives in the extracted payload's
+  top-level `autocomplete_by_keyword` data and in the raw analysis JSON's
+  `autocomplete_suggestions` section.
+- Summary excerpts in `examples/` should preserve representative
+  autocomplete terms. Do not infer autocomplete absence from a truncated
+  keyword profile excerpt alone.

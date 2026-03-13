@@ -43,10 +43,15 @@ PER-KEYWORD PROFILES (primary data source for Section 2):
 - keyword_profiles: one pre-joined profile per root keyword
   containing total_results, SERP modules, AI Overview presence,
   local pack presence, entity distribution, dominant entity type,
-  top-5 organic results, AIO citation count + top sources, PAA
-  questions, autocomplete, related searches, local pack count,
-  and client visibility flags. Each keyword profile is self-
-  contained. Report from it directly.
+  entity_label, top-5 organic results, AIO citation count + top
+  sources, PAA questions, autocomplete, related searches, local
+  pack count, and client visibility flags. Each keyword profile
+  is self-contained. Report from it directly.
+- entity_label: pre-computed entity mix classification. One of:
+  "dominated_by_[type]" (>60% of classified),
+  "[type]_plurality" (highest count but below 60%),
+  "mixed_[type1]_[type2]..." (top types tied or within 2 results),
+  or "unclassified". Use this as the starting point for Section 2.
 
 COMPETITIVE LANDSCAPE:
 - competitive_landscape: per-keyword summaries with entity breakdown
@@ -182,20 +187,51 @@ If a keyword has no PAA questions (paa_questions is empty), say
 the gap with questions from other keywords. If a term has zero
 mentions, say so. If client_position shows zero AIO citations,
 do not describe AIO citation opportunities as if the client
-currently has them.
+currently has them. When two pre-computed values look unusual
+(for example has_ai_overview=True but aio_citation_count=0),
+state both facts and stop. Do not speculate about the cause.
+Phrases like "indicating technical issues," "suggesting content
+filtering," "possibly due to," or "likely because" are not
+permitted when explaining data anomalies.
 
-RULE 9: MIXED LANDSCAPES ARE DESCRIBED AS MIXED.
-If a keyword's entity_distribution shows both legal (>3) and
-counselling (>3) entities, describe the SERP as mixed or
-contested. Do not label it as dominated by one type unless that
-type exceeds 60% of classified entities.
+RULE 9: ENTITY LABELING THRESHOLDS.
+Use keyword_profiles.entity_label as the starting point for every
+Section 2 keyword description. You may expand it with counts, but
+you must not contradict it.
+- "dominated by [type]": that type exceeds 60% of classified
+  entities
+- "[type] plurality" or "[type] leads": highest count but below
+  60%
+- "mixed" or "contested": two or more types are tied or within
+  2 entities of each other
+Example: counselling 6, media 6, legal 4, directory 3 out of 20
+classified -> mixed, with counselling and media tied at 6 each
+and legal at 4. NOT "counselling dominance."
+Example: counselling 17, directory 3, nonprofit 2 out of 24
+classified -> dominated by counselling entities (17 of 24, 71%).
+Example: legal 12, counselling 5 out of 24 classified -> legal
+plurality (12 of 24, 50%) with counselling secondary at 5. NOT
+"dominated by legal."
 
 RULE 10: TOTAL RESULTS IS NOT SEARCH VOLUME.
 Never describe total_results as "monthly searches," "search
 volume," or "demand." Use "total indexed results," "estimated
 market scale," or "Google's result count estimate."
 
-RULE 11: DISTINGUISH EVIDENCE FROM CLIENT-ANGLE INFERENCE.
+RULE 11: DO NOT OVERRIDE PRE-COMPUTED FLAGS.
+If a pre-computed field (has_ai_overview, has_local_pack,
+stability, entity_label, etc.) seems inconsistent with other
+data, state both facts. Do not silently adjust counts based on
+your interpretation of the underlying data.
+Example: if has_ai_overview=True but aio_citation_count=0, say
+"AI Overview is present but returned 0 citations for this
+keyword." Do NOT say "5 of 6 queries feature AI Overviews" when
+the data shows 6 of 6.
+Example: if has_local_pack=True but local_pack_count=2, say
+"Local pack is present with 2 businesses listed." Do NOT say
+"no meaningful local pack presence."
+
+RULE 12: DISTINGUISH EVIDENCE FROM CLIENT-ANGLE INFERENCE.
 If a recommendation comes directly from observed SERP behavior,
 label it as a SERP-evidenced demand gap. If it comes from the
 client's framework being different from current results, label it
@@ -218,13 +254,13 @@ unclassified rate, missing data).
 For EACH root keyword, produce a subsection:
 
 **[keyword] ([total_results] total results)**
-State the entity_distribution counts and identify the dominant
-type (or "mixed" per Rule 9). Name the top 3 organic sources with
-entity types. State AIO status: has_ai_overview, aio_citation_count,
-and top cited source. State whether the client is visible, at what
-rank, and with what stability. List SERP modules present. List PAA
-questions for this keyword (or state none were captured). Note if
-total_results < 500.
+State the entity_distribution counts and describe the entity mix
+using entity_label. Name the top 3 organic sources with entity
+types. State AIO status exactly from has_ai_overview and
+aio_citation_count, even if the values look unusual. State whether
+the client is visible, at what rank, and with what stability. List
+SERP modules present. List PAA questions for this keyword (or state
+none were captured). Note if total_results < 500.
 
 After all 6 subsections, write one synthesis paragraph grouping
 keywords that share entity mixes and intent patterns. This

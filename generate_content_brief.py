@@ -197,6 +197,47 @@ def _normalize_text(value):
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
+def _classify_entity_distribution(distribution):
+    counts = Counter({
+        entity: _safe_int(count)
+        for entity, count in (distribution or {}).items()
+        if _safe_int(count) > 0
+    })
+    if not counts:
+        return None, "unclassified"
+
+    ranked = counts.most_common()
+    top_entity, top_count = ranked[0]
+    second_count = ranked[1][1] if len(ranked) > 1 else 0
+    classified_total = sum(counts.values())
+    top_pct = top_count / classified_total if classified_total else 0.0
+
+    if top_pct >= 0.60:
+        return top_entity, f"dominated_by_{top_entity}"
+
+    tied_or_close = [
+        entity for entity, count in ranked
+        if (top_count - count) <= 2
+    ]
+    if len(tied_or_close) >= 2:
+        return top_entity, f"mixed_{'_'.join(sorted(tied_or_close))}"
+
+    return top_entity, f"{top_entity}_plurality"
+
+
+def _entity_label_reason_text(entity_label, dominant_type):
+    label = str(entity_label or "")
+    if label.startswith("dominated_by_"):
+        return f"Dominated by {label.removeprefix('dominated_by_')} entities."
+    if label.endswith("_plurality"):
+        return f"{label.removesuffix('_plurality').replace('_', ' ')} plurality."
+    if label.startswith("mixed_"):
+        return f"Mixed or contested across {label.removeprefix('mixed_').replace('_', ', ')}."
+    if dominant_type:
+        return f"Leading entity type: {dominant_type}."
+    return "Mixed entity distribution."
+
+
 def _client_match_patterns(client_name_patterns):
     patterns = []
     for pattern in client_name_patterns or []:
@@ -307,6 +348,7 @@ def _compute_strategic_flags(root_keywords, keyword_profiles, client_position, t
         client_delta = profile.get("client_rank_delta")
         client_visible = profile.get("client_visible", False)
         entity_dominant = profile.get("entity_dominant_type")
+        entity_label = profile.get("entity_label")
 
         if client_visible and client_delta is not None and client_delta < 0:
             action = "defend"
@@ -330,17 +372,17 @@ def _compute_strategic_flags(root_keywords, keyword_profiles, client_position, t
             reason = (
                 f"Only {total_results} total results. Market too small to justify dedicated content investment."
             )
-        elif entity_dominant == "legal":
+        elif entity_label in {"dominated_by_legal", "legal_plurality"}:
             action = "enter_cautiously"
             reason = (
-                "Legal entities dominate this SERP. Entry requires differentiated content "
+                "Legal entities lead this SERP. Entry requires differentiated content "
                 "that avoids competing on legal topics directly."
             )
         else:
             action = "enter"
             reason = (
                 f"{total_results:,} total results. Client has no current visibility. "
-                f"Dominant entity type: {entity_dominant or 'mixed'}."
+                f"{_entity_label_reason_text(entity_label, entity_dominant)}"
             )
 
         opportunity_scale[kw] = {
@@ -813,7 +855,7 @@ def extract_analysis_data_from_json(data, client_domain, client_name_patterns=No
             f"{item['module']}:{item['order']}"
             for item in sorted(modules_by_kw.get(kw, []), key=lambda x: x["order"])
         ]
-        dominant = entity_by_kw.get(kw, Counter()).most_common(1)
+        dominant_type, entity_label = _classify_entity_distribution(entity_by_kw.get(kw, {}))
         keyword_profiles[kw] = {
             "total_results": total_results_by_kw.get(kw, 0),
             "serp_modules": modules_list,
@@ -821,7 +863,8 @@ def extract_analysis_data_from_json(data, client_domain, client_name_patterns=No
             "has_local_pack": kw in serp_has_local,
             "has_discussions_forums": any("discussions" in item["module"] or "forums" in item["module"] for item in modules_by_kw.get(kw, [])),
             "entity_distribution": dict(entity_by_kw.get(kw, {})),
-            "entity_dominant_type": dominant[0][0] if dominant else None,
+            "entity_dominant_type": dominant_type,
+            "entity_label": entity_label,
             "top5_organic": kw_rows[:5],
             "aio_citation_count": sum(aio_by_kw.get(kw, Counter()).values()),
             "aio_top_sources": aio_by_kw.get(kw, Counter()).most_common(5),
@@ -1127,11 +1170,38 @@ def _mixed_keyword_dominance_profiles(extracted_data):
     return profiles
 
 
+def _label_requires_mixed(entity_label):
+    return str(entity_label or "").startswith("mixed_")
+
+
+def _label_requires_plurality(entity_label):
+    return str(entity_label or "").endswith("_plurality")
+
+
 def validate_llm_report(report_text, extracted_data):
     issues = []
     report_l = _normalize_text(report_text)
     query_count = len(extracted_data.get("queries", []))
-    queries_with_aio = sum(1 for q in extracted_data.get("queries", []) if q.get("has_ai_overview"))
+    keyword_profiles = extracted_data.get("keyword_profiles", {}) or {}
+    queries_with_aio = sum(
+        1 for profile in keyword_profiles.values()
+        if profile.get("has_ai_overview")
+    ) or sum(1 for q in extracted_data.get("queries", []) if q.get("has_ai_overview"))
+
+    speculative_patterns = [
+        r"indicating (?:technical|content|data|system)\w*",
+        r"suggesting (?:a |that |some )?(?:bug|issue|problem|filter)",
+        r"possibly due to",
+        r"likely (?:because|due|caused)",
+        r"technical issues? or content filtering",
+        r"content filtering",
+    ]
+    for pattern in speculative_patterns:
+        if re.search(pattern, report_l):
+            issues.append(
+                f"Report contains speculative causal language matching pattern: {pattern}"
+            )
+            break
 
     paa_cross_questions = {
         _normalize_text(item.get("question"))
@@ -1195,6 +1265,18 @@ def validate_llm_report(report_text, extracted_data):
                     f"Report claims AI Overviews appear for all {query_count} queries, but verified data shows {queries_with_aio} of {query_count}."
                 )
                 break
+    aio_count_match = re.search(
+        r"(\d+)\s+of\s+(\d+)\s+quer(?:y|ies)\s+(?:feature|have|show|trigger)",
+        report_text,
+        flags=re.IGNORECASE,
+    )
+    if aio_count_match:
+        reported_with_aio = int(aio_count_match.group(1))
+        reported_total = int(aio_count_match.group(2))
+        if query_count and reported_total == query_count and reported_with_aio != queries_with_aio:
+            issues.append(
+                f"Report says {reported_with_aio} of {reported_total} queries have AI Overviews, but keyword_profiles shows {queries_with_aio} of {query_count}."
+            )
 
     if re.search(r"data collection issue|potential data collection issue|suggesting .*data collection issue", report_l):
         issues.append(
@@ -1228,6 +1310,27 @@ def validate_llm_report(report_text, extracted_data):
         if re.search(rf"\b{re.escape(top_entity)} (?:entities )?(?:heavily )?dominat", section_text, flags=re.IGNORECASE):
             issues.append(
                 f"Report labels '{keyword}' as {top_entity}-dominant, but the classified entity mix is too close ({top_count} vs {second_count}; {top_share:.0%} share) and should be described as mixed or contested."
+            )
+
+    for keyword, profile in keyword_profiles.items():
+        entity_label = profile.get("entity_label")
+        if not entity_label:
+            continue
+        section_match = re.search(
+            rf"\*\*{re.escape(keyword)} \([^\n]+\)\*\*(.*?)(?:\n\n\*\*|\n### |\Z)",
+            report_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not section_match:
+            continue
+        section_l = _normalize_text(section_match.group(1))
+        if _label_requires_mixed(entity_label) and re.search(r"\bdominat(?:e|ed|es|ing)\b", section_l):
+            issues.append(
+                f"Report contradicts keyword_profiles.entity_label for '{keyword}': {entity_label} should be described as mixed or contested, not dominant."
+            )
+        if _label_requires_plurality(entity_label) and re.search(r"\bdominat(?:e|ed|es|ing)\b", section_l):
+            issues.append(
+                f"Report contradicts keyword_profiles.entity_label for '{keyword}': {entity_label} should be described as a plurality, not dominant."
             )
 
     return issues
