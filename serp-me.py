@@ -50,12 +50,14 @@ class SerpLauncherApp:
         "unknown": {"background": "#f5f5f5"},
     }
     REPORT_MODEL_OPTIONS = [
-        "claude-sonnet-4-20250514",
         "claude-opus-4-6",
+        "claude-sonnet-4-20250514",
         "claude-opus-4-1-20250805",
         "claude-opus-4-20250514",
         "claude-3-7-sonnet-20250219",
     ]
+    MAIN_REPORT_DEFAULT_MODEL = "claude-opus-4-6"
+    ADVISORY_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
     def __init__(self, root):
         self.root = root
@@ -226,7 +228,7 @@ class SerpLauncherApp:
         model_frame = ttk.Frame(root)
         model_frame.pack(fill="x", padx=20, pady=(0, 6))
         ttk.Label(model_frame, text="Main Report Model:").pack(side="left", padx=(0, 6))
-        self.main_model_var = tk.StringVar(value=self.REPORT_MODEL_OPTIONS[0])
+        self.main_model_var = tk.StringVar(value=self.MAIN_REPORT_DEFAULT_MODEL)
         self.main_model_combo = ttk.Combobox(
             model_frame,
             textvariable=self.main_model_var,
@@ -236,7 +238,7 @@ class SerpLauncherApp:
         self.main_model_combo.pack(side="left", padx=(0, 12))
 
         ttk.Label(model_frame, text="Advisory Model:").pack(side="left", padx=(0, 6))
-        self.advisory_model_var = tk.StringVar(value=self.REPORT_MODEL_OPTIONS[0])
+        self.advisory_model_var = tk.StringVar(value=self.ADVISORY_DEFAULT_MODEL)
         self.advisory_model_combo = ttk.Combobox(
             model_frame,
             textvariable=self.advisory_model_var,
@@ -611,8 +613,8 @@ class SerpLauncherApp:
 
         cmd = [sys.executable, script_info["file"]]
         if script_info["file"] == "generate_content_brief.py":
-            main_model = self.main_model_var.get().strip() or self.REPORT_MODEL_OPTIONS[0]
-            advisory_model = self.advisory_model_var.get().strip() or main_model
+            main_model = self.main_model_var.get().strip() or self.MAIN_REPORT_DEFAULT_MODEL
+            advisory_model = self.advisory_model_var.get().strip() or self.ADVISORY_DEFAULT_MODEL
             cmd.extend([
                 "--json", run_context["input_json"],
                 "--list",

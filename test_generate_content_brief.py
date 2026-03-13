@@ -239,6 +239,23 @@ This may indicate a data collection issue.
         )
         self.assertTrue(any("queries have ai overviews" in issue.lower() for issue in issues))
 
+    def test_has_hard_validation_failures_flags_count_and_entity_issues(self):
+        self.assertTrue(
+            gcb.has_hard_validation_failures([
+                "Report says 5 of 6 queries have AI Overviews, but keyword_profiles shows 6 of 6."
+            ])
+        )
+        self.assertTrue(
+            gcb.has_hard_validation_failures([
+                "Report contradicts keyword_profiles.entity_label for 'estrangement from adult children': mixed_counselling_legal_media should be described as mixed or contested, not dominant."
+            ])
+        )
+        self.assertFalse(
+            gcb.has_hard_validation_failures([
+                "Report contains speculative causal language matching pattern: possibly due to"
+            ])
+        )
+
     def test_validate_llm_report_flags_mixed_keyword_dominance(self):
         extracted = {
             "queries": [],

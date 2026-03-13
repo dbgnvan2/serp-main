@@ -51,9 +51,12 @@ DEFAULT_CLIENT_CONTEXT = {
     ],
 }
 
+MAIN_REPORT_DEFAULT_MODEL = "claude-opus-4-6"
+ADVISORY_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
 SUPPORTED_REPORT_MODELS = [
-    "claude-sonnet-4-20250514",
     "claude-opus-4-6",
+    "claude-sonnet-4-20250514",
     "claude-opus-4-1-20250805",
     "claude-opus-4-20250514",
     "claude-3-7-sonnet-20250219",
@@ -1178,6 +1181,28 @@ def build_correction_message(validation_issues, template_path=CORRECTION_PROMPT_
     return template.replace("{{VALIDATION_ISSUES}}", issues_text)
 
 
+def has_hard_validation_failures(validation_issues):
+    hard_patterns = [
+        "contradicts keyword_profiles.entity_label",
+        "queries have ai overviews",
+        "claims ai overviews appear for all",
+        "cites 'toxic' as a high-volume autocomplete term",
+        "cross-cutting 'toxic' opportunity",
+        "marks '",
+    ]
+    for issue in validation_issues:
+        normalized = _normalize_text(issue)
+        if "despite zero verified trigger evidence" in normalized:
+            return True
+        if "but keyword_profiles shows" in normalized:
+            return True
+        if "but verified data shows" in normalized:
+            return True
+        if any(pattern in normalized for pattern in hard_patterns):
+            return True
+    return False
+
+
 def write_validation_artifact(output_path, title, validation_issues, draft_text):
     base, _ext = os.path.splitext(output_path)
     artifact_path = base + ".validation.md"
@@ -1768,8 +1793,8 @@ def list_recommendations(data, args):
         f"{len(extracted.get('queries', []))} queries, "
         f"{extracted.get('aio_total_citations', 0)} AIO citations."
     )
-    compact_size = len(json.dumps(extracted, separators=(",", ":"), default=str))
-    progress(f"      Compact extracted JSON size: {compact_size} chars.")
+    extracted_size = len(json.dumps(extracted, separators=(",", ":"), default=str))
+    progress(f"      Extracted data object size: {extracted_size} chars.")
 
     if args.use_llm:
         if not ANTHROPIC_AVAILABLE:
@@ -1789,6 +1814,9 @@ def list_recommendations(data, args):
             sys.exit(2)
         try:
             progress("[6/7] Building LLM prompt payload...")
+            prompt_payload = build_main_report_payload(extracted)
+            prompt_payload_size = len(json.dumps(prompt_payload, separators=(",", ":"), default=str))
+            progress(f"      Main report prompt payload size: {prompt_payload_size} chars.")
             user_prompt = build_user_prompt(user_template, context, extracted, warnings)
             report = run_llm_report(
                 system_prompt=system_prompt,
@@ -1798,20 +1826,23 @@ def list_recommendations(data, args):
             )
             validation_issues = validate_llm_report(report, extracted)
             if validation_issues and not args.allow_unverified_report:
-                progress("[retry] Initial LLM draft failed evidence validation. Requesting one corrected revision...")
-                correction_msg = build_correction_message(
-                    validation_issues,
-                    template_path=args.correction_prompt,
-                )
-                report = run_llm_report(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    model=args.llm_model,
-                    max_tokens=args.llm_max_tokens,
-                    prior_response=report,
-                    correction_message=correction_msg,
-                )
-                validation_issues = validate_llm_report(report, extracted)
+                if has_hard_validation_failures(validation_issues):
+                    progress("[fail-fast] Initial LLM draft failed hard factual validation. Skipping retry.")
+                else:
+                    progress("[retry] Initial LLM draft failed evidence validation. Requesting one corrected revision...")
+                    correction_msg = build_correction_message(
+                        validation_issues,
+                        template_path=args.correction_prompt,
+                    )
+                    report = run_llm_report(
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        model=args.llm_model,
+                        max_tokens=args.llm_max_tokens,
+                        prior_response=report,
+                        correction_message=correction_msg,
+                    )
+                    validation_issues = validate_llm_report(report, extracted)
                 if validation_issues:
                     artifact_path = write_validation_artifact(
                         args.report_out,
@@ -1981,7 +2012,7 @@ def main():
                         help="Use Anthropic API with prompt spec (fails if LLM path is unavailable)")
     parser.add_argument("--config", default="config.yml",
                         help="Path to YAML config (reads analysis_report client context)")
-    parser.add_argument("--llm-model", default="claude-sonnet-4-20250514")
+    parser.add_argument("--llm-model", default=MAIN_REPORT_DEFAULT_MODEL)
     parser.add_argument("--llm-max-tokens", type=int, default=16000)
     parser.add_argument("--allow-unverified-report", action="store_true",
                         help="Write the LLM report even if evidence validation flags unsupported claims")
@@ -1989,7 +2020,7 @@ def main():
                         help="Run a second LLM pass to produce a strategic advisory briefing")
     parser.add_argument("--advisory-out", default="advisory_briefing.md",
                         help="Output path for the advisory briefing")
-    parser.add_argument("--advisory-model", default=None,
+    parser.add_argument("--advisory-model", default=ADVISORY_DEFAULT_MODEL,
                         help="Model for advisory pass (defaults to --llm-model)")
     args = parser.parse_args()
 

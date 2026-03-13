@@ -114,9 +114,9 @@ The launcher now lets you choose separate models for:
 
 Recommended default:
 
-- Main report: `claude-sonnet-4-20250514`
-- Advisory briefing: `claude-opus-4-6` if you want a slower,
-  higher-quality second pass
+- Main report: `claude-opus-4-6`
+- Advisory briefing: `claude-sonnet-4-20250514` by default,
+  or `claude-opus-4-6` if you want a slower, higher-quality second pass
 
 For lower SerpApi usage in routine runs:
 
@@ -166,6 +166,18 @@ advisory_briefing.validation.md
 ```
 
 These files list the rejected claims and include the rejected draft text.
+Hard factual contradictions such as `entity_label` mismatches and AI
+Overview count mismatches now fail fast without a retry. Softer issues,
+such as wording or speculative phrasing, still get one correction retry.
+
+The report-generation log now distinguishes:
+
+- extracted data object size
+- main report prompt payload size
+
+This makes it easier to see what is stored internally versus what is
+actually sent to the model.
+
 You can bypass first-pass report validation only with:
 
 ```bash
