@@ -23,18 +23,17 @@ Usage
 
 Environment variables
 ---------------------
-MOZ_ACCESS_ID   Moz API access ID  (required)
-MOZ_SECRET_KEY  Moz API secret key (required)
+MOZ_TOKEN   Moz API token (required) — generated in the Moz API dashboard.
 
-Both are read at instantiation time.  A ``RuntimeError`` is raised if either
-is absent so the calling pipeline can set ``MOZ_AVAILABLE = False`` and
-degrade gracefully rather than fail silently mid-run.
+Read at instantiation time.  A ``RuntimeError`` is raised if absent so the
+calling pipeline can set ``MOZ_AVAILABLE = False`` and degrade gracefully
+rather than fail silently mid-run.
 
 API reference
 -------------
 Endpoint : POST https://lsapi.seomoz.com/v2/url_metrics
-Auth     : HTTP Basic (access_id : secret_key)
-Batch    : up to 25 URLs per request (MOZ_BATCH_SIZE)
+Auth     : x-moz-token header
+Batch    : up to 50 URLs per request (MOZ_BATCH_SIZE)
 """
 
 from __future__ import annotations
@@ -43,7 +42,6 @@ import json
 import logging
 import os
 import sqlite3
-from base64 import b64encode
 from datetime import datetime, timedelta
 from typing import Iterator
 
@@ -65,7 +63,7 @@ except ImportError:
 MOZ_ENDPOINT = "https://lsapi.seomoz.com/v2/url_metrics"
 
 #: Maximum URLs per Moz API request (hard limit imposed by Moz).
-MOZ_BATCH_SIZE: int = 25
+MOZ_BATCH_SIZE: int = 50
 
 #: Request timeout in seconds.
 REQUEST_TIMEOUT: int = 30
@@ -93,20 +91,18 @@ class MozClient:
     Raises
     ------
     RuntimeError
-        If ``MOZ_ACCESS_ID`` or ``MOZ_SECRET_KEY`` environment variables are
-        not set.  Callers should catch this and set a ``MOZ_AVAILABLE`` flag.
+        If the ``MOZ_TOKEN`` environment variable is not set.  Callers should
+        catch this and set a ``MOZ_AVAILABLE`` flag.
     """
 
     def __init__(self, db_path: str = "serp_data.db", cache_ttl_days: int = 30) -> None:
-        access_id = os.getenv("MOZ_ACCESS_ID")
-        secret_key = os.getenv("MOZ_SECRET_KEY")
-        if not access_id or not secret_key:
+        token = os.getenv("MOZ_TOKEN")
+        if not token:
             raise RuntimeError(
-                "Moz credentials not found. Set MOZ_ACCESS_ID and MOZ_SECRET_KEY "
-                "environment variables (or add them to your .env file)."
+                "Moz credentials not found. Set MOZ_TOKEN in your .env file "
+                "(generate a token in the Moz API dashboard)."
             )
-        token = b64encode(f"{access_id}:{secret_key}".encode()).decode()
-        self._auth_header = {"Authorization": f"Basic {token}"}
+        self._auth_header = {"x-moz-token": token}
         self._db_path = db_path
         self._cache_ttl = timedelta(days=cache_ttl_days)
         self._init_cache_table()

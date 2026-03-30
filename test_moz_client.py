@@ -9,7 +9,6 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from base64 import b64encode
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +19,8 @@ try:
 except ImportError:
     from datetime import timezone as _tz
     _UTC = _tz.utc
+
+MOZ_ENV = {"MOZ_TOKEN": "test-token-abc123"}
 
 
 def _make_moz_response(urls: list[str], da: int = 40, pa: int = 30) -> MagicMock:
@@ -37,40 +38,32 @@ def _make_moz_response(urls: list[str], da: int = 40, pa: int = 30) -> MagicMock
 
 class TestMozClientInit(unittest.TestCase):
 
-    def test_missing_access_id_raises(self):
-        with patch.dict(os.environ, {"MOZ_ACCESS_ID": "", "MOZ_SECRET_KEY": "secret"}):
+    def test_missing_token_raises(self):
+        with patch.dict(os.environ, {"MOZ_TOKEN": ""}):
             from moz_client import MozClient
             with tempfile.NamedTemporaryFile(suffix=".db") as f:
                 with self.assertRaises(RuntimeError):
                     MozClient(db_path=f.name)
 
-    def test_missing_secret_key_raises(self):
-        with patch.dict(os.environ, {"MOZ_ACCESS_ID": "myid", "MOZ_SECRET_KEY": ""}):
-            from moz_client import MozClient
-            with tempfile.NamedTemporaryFile(suffix=".db") as f:
-                with self.assertRaises(RuntimeError):
-                    MozClient(db_path=f.name)
-
-    def test_valid_credentials_do_not_raise(self):
-        with patch.dict(os.environ, {"MOZ_ACCESS_ID": "myid", "MOZ_SECRET_KEY": "secret"}):
+    def test_valid_token_does_not_raise(self):
+        with patch.dict(os.environ, MOZ_ENV):
             from moz_client import MozClient
             with tempfile.NamedTemporaryFile(suffix=".db") as f:
                 client = MozClient(db_path=f.name)
                 self.assertIsNotNone(client)
 
-    def test_auth_header_is_basic_auth(self):
-        with patch.dict(os.environ, {"MOZ_ACCESS_ID": "myid", "MOZ_SECRET_KEY": "mysecret"}):
+    def test_auth_header_uses_x_moz_token(self):
+        with patch.dict(os.environ, {"MOZ_TOKEN": "mytoken123"}):
             from moz_client import MozClient
             with tempfile.NamedTemporaryFile(suffix=".db") as f:
                 client = MozClient(db_path=f.name)
-                expected = "Basic " + b64encode(b"myid:mysecret").decode()
-                self.assertEqual(client._auth_header["Authorization"], expected)
+                self.assertEqual(client._auth_header["x-moz-token"], "mytoken123")
 
 
 class TestMozClientCacheTable(unittest.TestCase):
 
     def setUp(self):
-        self.env = patch.dict(os.environ, {"MOZ_ACCESS_ID": "id", "MOZ_SECRET_KEY": "secret"})
+        self.env = patch.dict(os.environ, MOZ_ENV)
         self.env.start()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         from moz_client import MozClient
@@ -95,7 +88,7 @@ class TestMozClientCacheTable(unittest.TestCase):
 class TestMozClientBatching(unittest.TestCase):
 
     def setUp(self):
-        self.env = patch.dict(os.environ, {"MOZ_ACCESS_ID": "id", "MOZ_SECRET_KEY": "secret"})
+        self.env = patch.dict(os.environ, MOZ_ENV)
         self.env.start()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         from moz_client import MozClient
@@ -106,17 +99,17 @@ class TestMozClientBatching(unittest.TestCase):
         os.unlink(self.tmp.name)
 
     @patch("moz_client.requests.post")
-    def test_60_urls_calls_fetch_3_times(self, mock_post):
-        urls = [f"https://example{i}.com/" for i in range(60)]
+    def test_100_urls_calls_fetch_twice(self, mock_post):
+        urls = [f"https://example{i}.com/" for i in range(100)]
         mock_post.side_effect = lambda *a, **kw: _make_moz_response(
             kw["json"]["targets"]
         )
         self.client.get_moz_metrics(urls)
-        self.assertEqual(mock_post.call_count, 3)
+        self.assertEqual(mock_post.call_count, 2)
 
     @patch("moz_client.requests.post")
-    def test_25_urls_calls_fetch_once(self, mock_post):
-        urls = [f"https://example{i}.com/" for i in range(25)]
+    def test_50_urls_calls_fetch_once(self, mock_post):
+        urls = [f"https://example{i}.com/" for i in range(50)]
         mock_post.return_value = _make_moz_response(urls)
         self.client.get_moz_metrics(urls)
         self.assertEqual(mock_post.call_count, 1)
@@ -144,7 +137,7 @@ class TestMozClientBatching(unittest.TestCase):
 class TestMozClientCache(unittest.TestCase):
 
     def setUp(self):
-        self.env = patch.dict(os.environ, {"MOZ_ACCESS_ID": "id", "MOZ_SECRET_KEY": "secret"})
+        self.env = patch.dict(os.environ, MOZ_ENV)
         self.env.start()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         from moz_client import MozClient
@@ -212,7 +205,7 @@ class TestMozClientCache(unittest.TestCase):
 class TestMozClientErrorHandling(unittest.TestCase):
 
     def setUp(self):
-        self.env = patch.dict(os.environ, {"MOZ_ACCESS_ID": "id", "MOZ_SECRET_KEY": "secret"})
+        self.env = patch.dict(os.environ, MOZ_ENV)
         self.env.start()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         from moz_client import MozClient
@@ -231,7 +224,7 @@ class TestMozClientErrorHandling(unittest.TestCase):
     @patch("moz_client.requests.post")
     def test_partial_batch_failure_returns_successful_batches(self, mock_post):
         """First batch fails, second succeeds — second results still returned."""
-        urls_batch1 = [f"https://fail{i}.com/" for i in range(25)]
+        urls_batch1 = [f"https://fail{i}.com/" for i in range(50)]
         urls_batch2 = [f"https://ok{i}.com/" for i in range(5)]
         all_urls = urls_batch1 + urls_batch2
 
