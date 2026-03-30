@@ -26,6 +26,17 @@ except ImportError:
     SERPAPI_AVAILABLE = False
 
 try:
+    from moz_client import MozClient
+    _moz_creds_present = bool(os.getenv("MOZ_ACCESS_ID") and os.getenv("MOZ_SECRET_KEY"))
+    MOZ_AVAILABLE = _moz_creds_present
+except ImportError:
+    MozClient = None
+    MOZ_AVAILABLE = False
+
+import feasibility as feasibility_module
+from intent_classifier import IntentClassifier
+
+try:
     from textblob import TextBlob
     TEXTBLOB_AVAILABLE = True
 except ImportError:
@@ -48,11 +59,49 @@ if os.path.exists("config.yml"):
         CONFIG = yaml.safe_load(f) or {}
 
 INPUT_FILE = CONFIG.get("files", {}).get("input_csv", "keywords.csv")
-OUTPUT_FILE = CONFIG.get("files", {}).get(
-    "output_xlsx", "market_analysis_v2.xlsx")
-OUTPUT_JSON = CONFIG.get("files", {}).get(
-    "output_json", "market_analysis_v2.json")
-OUTPUT_MD = CONFIG.get("files", {}).get("output_md", "market_analysis_v2.md")
+
+
+def _derive_output_slug(input_csv):
+    """Return a normalized lowercase slug from the keyword CSV filename.
+
+    Examples:
+        keywords.csv                  -> keywords
+        keywords_estrangement.csv     -> estrangement
+        Substance_Use.csv             -> substance_use
+        Basic Series Tape 7.csv       -> basic_series_tape_7
+    """
+    stem = os.path.splitext(os.path.basename(input_csv))[0]
+    if stem.lower().startswith("keywords_"):
+        stem = stem[len("keywords_"):]
+    return stem.lower().replace(" ", "_")
+
+
+def _resolve_output_names(input_csv, config):
+    """Return (xlsx, json, md) output filenames derived from the keyword CSV.
+
+    If config.yml already holds filenames whose slug matches the one derived
+    from *input_csv* (written by the GUI launcher before starting the pipeline),
+    those paths are reused so the GUI's pre-computed expectations stay correct.
+    Otherwise fresh timestamped names are generated.
+    """
+    slug = _derive_output_slug(input_csv)
+    files_cfg = config.get("files", {})
+    configured_json = files_cfg.get("output_json", "")
+    if configured_json and f"market_analysis_{slug}_" in configured_json:
+        return (
+            files_cfg.get("output_xlsx", f"market_analysis_{slug}.xlsx"),
+            configured_json,
+            files_cfg.get("output_md", f"market_analysis_{slug}.md"),
+        )
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    return (
+        f"market_analysis_{slug}_{ts}.xlsx",
+        f"market_analysis_{slug}_{ts}.json",
+        f"market_analysis_{slug}_{ts}.md",
+    )
+
+
+OUTPUT_FILE, OUTPUT_JSON, OUTPUT_MD = _resolve_output_names(INPUT_FILE, CONFIG)
 
 LOCATION = CONFIG.get("serpapi", {}).get(
     "location", "Vancouver, British Columbia, Canada")
@@ -80,6 +129,16 @@ FORCE_LOCAL_INTENT = CONFIG.get("app", {}).get("force_local_intent", True)
 ENRICHMENT_ENABLED = CONFIG.get("enrichment", {}).get("enabled", True)
 MAX_URLS_TO_ENRICH = CONFIG.get(
     "enrichment", {}).get("max_urls_per_keyword", 5)
+
+# --- FEASIBILITY / MOZ ---
+_feas_cfg = CONFIG.get("feasibility", {})
+FEASIBILITY_ENABLED      = _feas_cfg.get("enabled", False)
+FEASIBILITY_CLIENT_DA    = int(_feas_cfg.get("client_da", 0))
+FEASIBILITY_LOCATION     = _feas_cfg.get("non_profit_location", "")
+FEASIBILITY_PIVOT_FETCH  = _feas_cfg.get("pivot_serp_fetch", True)
+FEASIBILITY_NEIGHBORHOODS = _feas_cfg.get("neighborhoods", [])
+CLIENT_DOMAIN            = CONFIG.get("analysis_report", {}).get("client_domain", "")
+MOZ_CACHE_TTL_DAYS       = int(CONFIG.get("moz", {}).get("cache_ttl_days", 30))
 
 STOP_WORDS = {"the", "and", "to", "of", "a", "in", "is", "for", "on", "with", "as", "at", "by", "an", "be", "or", "are", "from", "that",
               "this", "it", "we", "our", "us", "can", "will", "your", "you", "my", "me", "not", "have", "has", "but", "so", "if", "their", "they",
@@ -1425,6 +1484,24 @@ def main():
         # Params hash updated per keyword later, but run init here
         storage.save_run(run_id, "N/A")
 
+    # Initialize Feasibility / Moz modules
+    moz_client = None
+    if FEASIBILITY_ENABLED and MOZ_AVAILABLE:
+        try:
+            moz_client = MozClient(db_path="serp_data.db", cache_ttl_days=MOZ_CACHE_TTL_DAYS)
+            print(f"--- MOZ DA enrichment: ENABLED (client_da={FEASIBILITY_CLIENT_DA}) ---")
+        except RuntimeError as e:
+            print(f"--- MOZ DA enrichment: DISABLED ({e}) ---")
+    elif FEASIBILITY_ENABLED:
+        print("--- MOZ DA enrichment: DISABLED (MOZ_ACCESS_ID / MOZ_SECRET_KEY not set) ---")
+
+    intent_classifier = IntentClassifier()
+    print(f"--- Intent classifier: ENABLED ---")
+
+    # Pivot jobs are queued here and processed in a second pass after the main loop
+    pending_pivot_jobs: list[tuple[str, str, str]] = []
+    all_feasibility: list[dict] = []
+
     # Data Containers
     all_metrics = []
     all_organic = []
@@ -1471,6 +1548,13 @@ def main():
         if raw_data_dict:
             m, o, p, e, c, lp, ac, sm, rf, pw = parse_data(
                 keyword, raw_data_dict, query_metadata)
+
+            # Tag PAA questions with Bowen/medical intent
+            for row in p:
+                intent = intent_classifier.classify_paa(row.get("Question", ""))
+                row["Intent_Tag"] = intent["intent"]
+                row["Intent_Confidence"] = intent["confidence"]
+
             if m:  # Only append if parsing was successful
                 m["Source_Keyword"] = source_keyword
                 m["Query_Label"] = query_label
@@ -1579,6 +1663,86 @@ def main():
                                 item['Word_Count'] = features.get(
                                     'word_count_est', "N/A")
 
+                # --- MOZ DA + FEASIBILITY ---
+                if FEASIBILITY_ENABLED and moz_client is not None:
+                    keyword_urls = [
+                        item.get("Link") for item in o
+                        if item.get("Link") and item.get("Link") != "N/A"
+                    ][:10]
+
+                    if keyword_urls:
+                        moz_results = moz_client.get_moz_metrics(keyword_urls)
+
+                        # Write DA back onto each organic row and into url_features
+                        for item in o:
+                            url = item.get("Link")
+                            if url and url in moz_results:
+                                item["Competitor_DA"] = moz_results[url].get("da")
+                                item["Page_Authority"] = moz_results[url].get("pa")
+                                if ENRICHMENT_ENABLED:
+                                    storage.save_url_moz_metrics(
+                                        url,
+                                        moz_results[url]["da"],
+                                        moz_results[url]["pa"],
+                                    )
+
+                        competitor_das = [
+                            v["da"] for v in moz_results.values()
+                            if v.get("da") is not None
+                        ]
+                        if competitor_das:
+                            feas = feasibility_module.compute_feasibility(
+                                FEASIBILITY_CLIENT_DA, competitor_das
+                            )
+                            pivot_result = feasibility_module.generate_hyper_local_pivot(
+                                primary_keyword=source_keyword,
+                                non_profit_location=FEASIBILITY_LOCATION,
+                                feasibility_results={
+                                    "status": feas["feasibility_status"],
+                                    "avg_competitor_da": feas["avg_serp_da"],
+                                },
+                                neighborhoods=FEASIBILITY_NEIGHBORHOODS,
+                            )
+
+                            if ENRICHMENT_ENABLED:
+                                storage.save_keyword_feasibility(
+                                    keyword_text=source_keyword,
+                                    run_id=run_id,
+                                    query_label=query_label,
+                                    avg_serp_da=feas["avg_serp_da"],
+                                    client_da=FEASIBILITY_CLIENT_DA,
+                                    gap=feas["gap"],
+                                    feasibility_status=feas["feasibility_status"],
+                                    feasibility_score=feas["feasibility_score"],
+                                    client_in_local_pack=None,
+                                    pivot_variants=pivot_result.get("all_variants", []),
+                                )
+
+                            feas_row = {
+                                **feas,
+                                **pivot_result,
+                                "Keyword": source_keyword,
+                                "Query_Label": query_label,
+                                "Client_In_Local_Pack": None,
+                            }
+                            all_feasibility.append(feas_row)
+
+                            status_icon = {"High Feasibility": "✅", "Moderate Feasibility": "⚠️",
+                                           "Low Feasibility": "🔴"}.get(feas["feasibility_status"], "")
+                            print(f"  [Feasibility] {source_keyword}: "
+                                  f"{status_icon} {feas['feasibility_status']} "
+                                  f"(gap={feas['gap']}, avg_da={feas['avg_serp_da']})")
+
+                            if (feas["feasibility_status"] == "Low Feasibility"
+                                    and FEASIBILITY_PIVOT_FETCH
+                                    and pivot_result.get("suggested_keyword")):
+                                pending_pivot_jobs.append((
+                                    pivot_result["suggested_keyword"],
+                                    source_keyword,
+                                    "P",
+                                ))
+                                print(f"  [Pivot queued] → {pivot_result['suggested_keyword']}")
+
         # --- AUTOCOMPLETE ---
         ac_data = fetch_autocomplete(keyword)
         if ac_data and "suggestions" in ac_data:
@@ -1604,6 +1768,98 @@ def main():
                         run_id, source_keyword, val, idx + 1, rel, typ)
 
         time.sleep(1.2)  # Polite delay
+
+    # --- PIVOT KEYWORD FETCH PASS ---
+    # Secondary SERP + Maps fetch for Low Feasibility keywords.
+    # Maps is automatically included (FORCE_LOCAL_INTENT=true) so the local
+    # 3-pack can be checked for client domain presence.
+    if pending_pivot_jobs:
+        print(f"\n{'='*60}")
+        print(f"Running {len(pending_pivot_jobs)} pivot keyword fetch(es)...")
+        print(f"{'='*60}")
+
+    for p_idx, (pivot_keyword, source_keyword, query_label) in enumerate(pending_pivot_jobs):
+        print(f"\n[Pivot {p_idx+1}/{len(pending_pivot_jobs)}] '{pivot_keyword}' "
+              f"(from '{source_keyword}')")
+
+        raw_pivot, aio_log_p, meta_p = fetch_serp_data(pivot_keyword, run_id)
+        if not raw_pivot:
+            print(f"  [Pivot] No data returned for '{pivot_keyword}' — skipping.")
+            continue
+
+        _, p_organic, _, _, _, p_local_pack, _, _, _, _ = parse_data(
+            pivot_keyword, raw_pivot, meta_p
+        )
+
+        # Check local pack for client domain — the geographic relevance signal
+        client_in_local_pack = any(
+            CLIENT_DOMAIN and CLIENT_DOMAIN in (place.get("Website") or "")
+            for place in p_local_pack
+        )
+        pack_icon = "✓ IN local pack" if client_in_local_pack else "✗ not in local pack"
+        print(f"  [Local pack] {pack_icon}")
+
+        # Moz for pivot organic results
+        pivot_das: list[int] = []
+        if moz_client is not None:
+            pivot_urls = [
+                r.get("Link") for r in p_organic
+                if r.get("Link") and r.get("Link") != "N/A"
+            ][:10]
+            if pivot_urls:
+                pivot_moz = moz_client.get_moz_metrics(pivot_urls)
+                pivot_das = [v["da"] for v in pivot_moz.values() if v.get("da") is not None]
+                for item in p_organic:
+                    url = item.get("Link")
+                    if url and url in pivot_moz:
+                        item["Competitor_DA"] = pivot_moz[url].get("da")
+                        item["Page_Authority"] = pivot_moz[url].get("pa")
+                        if ENRICHMENT_ENABLED:
+                            storage.save_url_moz_metrics(
+                                url, pivot_moz[url]["da"], pivot_moz[url]["pa"]
+                            )
+
+        if pivot_das:
+            pivot_feas = feasibility_module.compute_feasibility(FEASIBILITY_CLIENT_DA, pivot_das)
+        else:
+            pivot_feas = {"avg_serp_da": None, "client_da": FEASIBILITY_CLIENT_DA,
+                          "gap": None, "feasibility_score": None,
+                          "feasibility_status": "Low Feasibility"}
+
+        if ENRICHMENT_ENABLED:
+            storage.save_keyword_feasibility(
+                keyword_text=pivot_keyword,
+                run_id=run_id,
+                query_label="P",
+                avg_serp_da=pivot_feas["avg_serp_da"],
+                client_da=FEASIBILITY_CLIENT_DA,
+                gap=pivot_feas["gap"],
+                feasibility_status=pivot_feas["feasibility_status"],
+                feasibility_score=pivot_feas["feasibility_score"],
+                client_in_local_pack=int(client_in_local_pack),
+                pivot_variants=[],
+            )
+
+        pivot_feas_row = {
+            **pivot_feas,
+            "Keyword": pivot_keyword,
+            "Source_Keyword": source_keyword,
+            "Query_Label": "P",
+            "Client_In_Local_Pack": client_in_local_pack,
+            "pivot_status": "Pivot result",
+            "suggested_keyword": None,
+            "all_variants": [],
+            "strategy": "",
+            "original_keyword": source_keyword,
+        }
+        all_feasibility.append(pivot_feas_row)
+
+        status_icon = {"High Feasibility": "✅", "Moderate Feasibility": "⚠️",
+                       "Low Feasibility": "🔴"}.get(pivot_feas["feasibility_status"], "")
+        print(f"  [Pivot result] {status_icon} {pivot_feas['feasibility_status']} "
+              f"gap={pivot_feas['gap']} avg_da={pivot_feas['avg_serp_da']}")
+
+        time.sleep(1.2)
 
     # --- N-GRAM ANALYSIS (SERP Language Patterns) ---
     print("Running N-Gram Analysis (SERP Language Patterns)...")
@@ -1712,7 +1968,8 @@ def main():
         "parsing_warnings": all_parsing_warnings,
         "aio_logs": all_aio_logs,
         "autocomplete_suggestions": all_autocomplete,
-        "help_guide": help_rows
+        "help_guide": help_rows,
+        "keyword_feasibility": all_feasibility,
     }
 
     print(f"Saving JSON to {OUTPUT_JSON}...")
@@ -1765,6 +2022,9 @@ def main():
                 writer, sheet_name="Autocomplete_Suggestions", index=False)
             pd.DataFrame(help_rows).to_excel(
                 writer, sheet_name="Help", index=False)
+            if all_feasibility:
+                pd.DataFrame(all_feasibility).to_excel(
+                    writer, sheet_name="Keyword_Feasibility", index=False)
 
         print(f"SUCCESS! Data saved to {OUTPUT_FILE}")
     except Exception as e:
@@ -1797,6 +2057,23 @@ def main():
         logging.error(f"Error saving Markdown report: {e}")
 
     print(f"--- Total SerpApi Calls: {SERPAPI_CALL_COUNT} ---")
+
+    # Write actual output paths back to config.yml so downstream scripts
+    # (run_pipeline.py, refresh_analysis_outputs.py) can locate the files.
+    try:
+        _cfg: dict = {}
+        if os.path.exists("config.yml"):
+            with open("config.yml", "r") as _f:
+                _cfg = yaml.safe_load(_f) or {}
+        _cfg.setdefault("files", {})
+        _cfg["files"]["output_xlsx"] = OUTPUT_FILE
+        _cfg["files"]["output_json"] = OUTPUT_JSON
+        _cfg["files"]["output_md"] = OUTPUT_MD
+        with open("config.yml", "w") as _f:
+            yaml.safe_dump(_cfg, _f, sort_keys=False, allow_unicode=False)
+        print(f"Updated config.yml: output paths set to {OUTPUT_JSON}")
+    except Exception as _e:
+        logging.warning(f"Could not update config.yml output paths: {_e}")
 
 
 if __name__ == "__main__":
