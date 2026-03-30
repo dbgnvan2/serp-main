@@ -1,6 +1,21 @@
 """
 storage.py
-Manages SQLite database for SERP history and enriched features.
+~~~~~~~~~~
+Manages the SQLite database for SERP history and enriched features.
+
+Tables
+------
+runs                   One row per audit run (run_id, date, params hash).
+keywords               Keyword inventory.
+serp_results           Raw SERP rankings per keyword per run.
+url_features           Enriched URL data including Moz DA/PA.
+domain_features        Entity type per domain.
+autocomplete_suggestions  Search autocomplete data.
+keyword_feasibility    Per-keyword DA gap assessment and pivot suggestions.
+
+All schema changes use ``CREATE TABLE IF NOT EXISTS`` or
+``ALTER TABLE … ADD COLUMN`` wrapped in ``try/except OperationalError``
+so the database migrates automatically on first use with no manual steps.
 """
 import sqlite3
 import json
@@ -76,6 +91,30 @@ class SerpStorage:
             FOREIGN KEY(run_id) REFERENCES runs(run_id)
         )''')
 
+        # 7. Keyword Feasibility  (DA gap analysis + hyper-local pivot suggestions)
+        c.execute('''CREATE TABLE IF NOT EXISTS keyword_feasibility (
+            keyword_text        TEXT,
+            run_id              TEXT,
+            query_label         TEXT,       -- "A" primary | "P" pivot
+            avg_serp_da         REAL,
+            client_da           INTEGER,
+            gap                 REAL,
+            feasibility_score   REAL,
+            feasibility_status  TEXT,
+            client_in_local_pack INTEGER,   -- 0/1; NULL for primary keywords
+            pivot_variants      TEXT,       -- JSON array of neighbourhood variants
+            computed_at         TEXT,
+            PRIMARY KEY (keyword_text, run_id),
+            FOREIGN KEY(run_id) REFERENCES runs(run_id)
+        )''')
+
+        # --- Migrations: add Moz DA/PA columns to url_features if absent ---
+        for col, col_type in [("competitor_da", "INTEGER"), ("page_authority", "INTEGER")]:
+            try:
+                c.execute(f"ALTER TABLE url_features ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists — safe to ignore
+
         conn.commit()
         conn.close()
 
@@ -112,7 +151,110 @@ class SerpStorage:
 
     def save_autocomplete_suggestion(self, run_id, source_keyword, suggestion, rank, relevance=None, type_=None):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute('''INSERT INTO autocomplete_suggestions 
+            conn.execute('''INSERT INTO autocomplete_suggestions
                             (run_id, source_keyword, suggestion, rank, relevance, type)
                             VALUES (?, ?, ?, ?, ?, ?)''',
                          (run_id, source_keyword, suggestion, rank, relevance, type_))
+
+    # ------------------------------------------------------------------
+    # Moz DA/PA
+    # ------------------------------------------------------------------
+
+    def save_url_moz_metrics(self, url: str, da: int, pa: int) -> None:
+        """Update the Moz Domain Authority and Page Authority for a URL.
+
+        If the URL does not yet exist in ``url_features`` a minimal row is
+        inserted so the FK relationship remains valid and the DA is queryable
+        even for URLs that weren't fully enriched.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO url_features (url) VALUES (?)", (url,)
+            )
+            conn.execute(
+                "UPDATE url_features SET competitor_da = ?, page_authority = ? WHERE url = ?",
+                (da, pa, url),
+            )
+
+    # ------------------------------------------------------------------
+    # Keyword Feasibility
+    # ------------------------------------------------------------------
+
+    def save_keyword_feasibility(
+        self,
+        keyword_text: str,
+        run_id: str,
+        query_label: str,
+        avg_serp_da: float | None,
+        client_da: int,
+        gap: float | None,
+        feasibility_status: str,
+        feasibility_score: float | None,
+        client_in_local_pack: int | None,
+        pivot_variants: list,
+    ) -> None:
+        """Upsert a feasibility assessment row.
+
+        Parameters
+        ----------
+        keyword_text:
+            The keyword or pivot keyword assessed.
+        run_id:
+            Current run identifier.
+        query_label:
+            ``"A"`` for a primary keyword, ``"P"`` for a pivot variant.
+        avg_serp_da:
+            Mean Domain Authority of the top-10 competitors (``None`` if
+            no Moz data was available).
+        client_da:
+            Domain Authority of the non-profit client.
+        gap:
+            ``avg_serp_da - client_da`` (``None`` if no Moz data).
+        feasibility_status:
+            ``"High Feasibility"``, ``"Moderate Feasibility"``, or
+            ``"Low Feasibility"``.
+        feasibility_score:
+            Normalised score 0.0–1.0 (``None`` if no Moz data).
+        client_in_local_pack:
+            ``1`` if the client domain appears in the local 3-pack for this
+            keyword, ``0`` if not, ``None`` for primary keywords (not checked).
+        pivot_variants:
+            List of neighbourhood-variant keyword strings.
+        """
+        pivot_json = json.dumps(pivot_variants)
+        computed_at = datetime.now().isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO keyword_feasibility
+                   (keyword_text, run_id, query_label, avg_serp_da, client_da,
+                    gap, feasibility_score, feasibility_status,
+                    client_in_local_pack, pivot_variants, computed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (keyword_text, run_id, query_label, avg_serp_da, client_da,
+                 gap, feasibility_score, feasibility_status,
+                 client_in_local_pack, pivot_json, computed_at),
+            )
+
+    def get_keyword_feasibility(self, run_id: str) -> list[dict]:
+        """Return all feasibility rows for *run_id*, ordered by gap descending.
+
+        Primary keywords (``query_label = "A"``) come first; pivot keywords
+        (``"P"``) immediately follow their parent sorted by gap.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT * FROM keyword_feasibility
+                   WHERE run_id = ?
+                   ORDER BY query_label ASC, gap DESC""",
+                (run_id,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            try:
+                d["pivot_variants"] = json.loads(d["pivot_variants"] or "[]")
+            except (ValueError, TypeError):
+                d["pivot_variants"] = []
+            result.append(d)
+        return result
