@@ -125,9 +125,9 @@ def test_generate_strike_report(mock_gsc_manager, tmpdir):
         mock_open.assert_called()
 
 def test_test_connection_success(mock_gsc_manager):
-    # Mock list_sites with Owner access
+    # Mock list_sites with Owner access (matching the 'www' config)
     mock_gsc_manager.service.sites().list().execute.return_value = {
-        'siteEntry': [{'siteUrl': 'https://livingsystems.ca/', 'permissionLevel': 'siteOwner'}]
+        'siteEntry': [{'siteUrl': 'https://www.livingsystems.ca/', 'permissionLevel': 'siteOwner'}]
     }
     # Mock query to succeed
     mock_gsc_manager.service.searchanalytics().query().execute.return_value = {}
@@ -139,12 +139,23 @@ def test_test_connection_success(mock_gsc_manager):
 def test_test_connection_fail_permission(mock_gsc_manager):
     # Mock list_sites with Unverified access
     mock_gsc_manager.service.sites().list().execute.return_value = {
-        'siteEntry': [{'siteUrl': 'https://livingsystems.ca/', 'permissionLevel': 'siteUnverifiedUser'}]
+        'siteEntry': [{'siteUrl': 'https://www.livingsystems.ca/', 'permissionLevel': 'siteUnverifiedUser'}]
     }
     
     success, message = mock_gsc_manager.test_connection()
     assert success is False
     assert "Insufficient permissions" in message
+
+def test_test_connection_fail_url_mismatch(mock_gsc_manager):
+    # Mock list_sites with a DIFFERENT URL (non-www in account, but config is www)
+    mock_gsc_manager.service.sites().list().execute.return_value = {
+        'siteEntry': [{'siteUrl': 'https://livingsystems.ca/', 'permissionLevel': 'siteOwner'}]
+    }
+    # Config is already https://www.livingsystems.ca/
+    success, message = mock_gsc_manager.test_connection()
+    assert success is False
+    assert "URL Mismatch" in message
+    assert "found 'https://livingsystems.ca/'" in message
 
 def test_generate_report(mock_gsc_manager, tmpdir):
     report_path = os.path.join(tmpdir, "gsc_strategic_gap.md")

@@ -8,6 +8,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from src.semantic import SemanticAuditor
 from src.reframe_engine import ReframeEngine
+from src.database import DatabaseManager
 
 # Paths relative to serp-compete/src/
 SHARED_CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "shared_config.json"))
@@ -23,6 +24,8 @@ class GSCManager:
         self.service = build('searchconsole', 'v1', credentials=self.creds)
         self.auditor = SemanticAuditor()
         self.reframe_engine = ReframeEngine()
+        self.db = DatabaseManager()
+        self._cached_sites = None
 
     def _load_json(self, path):
         if os.path.exists(path):
@@ -86,11 +89,15 @@ class GSCManager:
             return []
 
     def list_sites(self):
+        if self._cached_sites:
+            return self._cached_sites
+            
         try:
             response = self.service.sites().list().execute()
             sites = response.get('siteEntry', [])
             for s in sites:
                 print(f"- Site: {s['siteUrl']}, Permission: {s.get('permissionLevel')}")
+            self._cached_sites = sites
             return sites
         except Exception as e:
             print(f"⚠️ GSC List Sites Error: {e}")
@@ -109,7 +116,12 @@ class GSCManager:
 
             target_site = next((s for s in sites if s['siteUrl'] == site_url), None)
             if not target_site:
-                return False, f"Property {site_url} not found in account."
+                # Expert Logic: Check for common variations (www vs non-www) to provide a better error
+                alt_url = site_url.replace("://www.", "://") if "://www." in site_url else site_url.replace("://", "://www.")
+                found_alt = next((s for s in sites if s['siteUrl'] == alt_url), None)
+                if found_alt:
+                    return False, f"URL Mismatch: Configured '{site_url}' but found '{alt_url}' in GSC. Please update shared_config.json."
+                return False, f"Property {site_url} not found in account. Available sites: {', '.join([s['siteUrl'] for s in sites])}"
 
             perm = target_site.get('permissionLevel')
             if perm in ['siteUnverifiedUser', 'siteRestrictedUser']:
@@ -274,18 +286,26 @@ class GSCManager:
 
         # 2. Low-Hanging Fruit (Positions 11-20)
         low_hanging = df[(df['position'] > 10) & (df['position'] <= 20)].sort_values('impressions', ascending=False).head(10)
-
         # 3. Clinical Mismatch Check
+        # Match Bowen pages receiving Medical hits
         mismatches = []
         unique_pages = df['page'].unique()
         
         print("🔍 Scanning local pages for clinical alignment...")
         page_scores = {}
         for page in unique_pages[:20]: # Limit to top 20 pages for speed
+            cached_audit = self.db.was_audited_recently(page)
+            if cached_audit:
+                page_scores[page] = cached_audit
+                print(f"  ⚡ Using cached local audit for {page}")
+                continue
+                
             content = self.auditor.scrape_content(page)
-            if content:
+            if content and content != "BLOCK":
                 scores = self.auditor.analyze_text(content)
                 page_scores[page] = scores
+                # Save to audit table for future GSC caching
+                self.db.save_semantic_audit(page, scores['medical_score'], scores['systems_score'], run_id=0)
 
         for _, row in df.head(100).iterrows():
             page = row['page']
