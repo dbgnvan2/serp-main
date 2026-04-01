@@ -8,7 +8,7 @@
   },
   "auth": {
     "gsc_client_secrets": "/Users/davemini2/ProjectsLocal/serp-main/client_secret_275180378889-d0pki2mc14fq90eh4mo3hfsv1ubinnsc.apps.googleusercontent.com.json",
-    "gsc_property_url": "https://livingsystems.ca/",
+    "gsc_property_url": "https://www.livingsystems.ca/",
     "scopes": ["https://www.googleapis.com/auth/webmasters.readonly"]
   },
   "gsc_settings": {
@@ -75,7 +75,19 @@
       "luminohealth.sunlife.ca",
       "ratemds.com",
       "betterhelp.com",
-      "talkspace.com"
+      "talkspace.com",
+      "facebook.com",
+      "instagram.com",
+      "linkedin.com",
+      "mapquest.com",
+      "bing.com",
+      "google.com",
+      "foundrybc.ca",
+      "healthlinkbc.ca",
+      "vancouver.pathwaysbc.ca",
+      "pathwaysmedicalcare.ca",
+      "theshipyardsdistrict.ca",
+      "rcav.org"
     ]
   }
 }
