@@ -128,16 +128,23 @@ def pre_flight_check():
         print(f"❌ OpenAI Connectivity Error: {e}")
         return False
 
-    # 3. Check GSC Connectivity (Optional/Soft-Fail)
+    # 3. Check GSC Connectivity (Mandatory - Hard Fail)
     try:
         shared_config = load_shared_config()
         secrets_path = shared_config.get("auth", {}).get("gsc_client_secrets")
-        if secrets_path and os.path.exists(secrets_path):
-            print("✅ GSC Credentials Found.")
-        else:
-            print("⚠️ GSC Credentials not found. Skipping internal gap analysis.")
+        if not secrets_path or not os.path.exists(secrets_path):
+            print("❌ GSC Credentials not found. Please provide path to GSC Client Secrets in shared_config.json.")
+            return False
+            
+        gsc = GSCManager()
+        success, message = gsc.test_connection()
+        if not success:
+            print(f"❌ GSC Connectivity Error: {message}")
+            return False
+        print(f"✅ GSC Connection Verified: {message}")
     except Exception as e:
-        print(f"⚠️ GSC Check Error: {e}")
+        print(f"❌ GSC Check Error: {e}")
+        return False
 
     print("✅ All systems go. Starting Audit...\n")
     return True

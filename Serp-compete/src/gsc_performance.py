@@ -96,6 +96,34 @@ class GSCManager:
             print(f"⚠️ GSC List Sites Error: {e}")
             return []
 
+    def test_connection(self):
+        """
+        Verify that we can actually connect and have sufficient permissions.
+        Returns (bool, message)
+        """
+        site_url = self.config.get("auth", {}).get("gsc_property_url")
+        try:
+            sites = self.list_sites()
+            if not sites:
+                return False, "No GSC properties found for this account."
+
+            target_site = next((s for s in sites if s['siteUrl'] == site_url), None)
+            if not target_site:
+                return False, f"Property {site_url} not found in account."
+
+            perm = target_site.get('permissionLevel')
+            if perm in ['siteUnverifiedUser', 'siteRestrictedUser']:
+                return False, f"Insufficient permissions for {site_url} (Permission: {perm}). Please grant 'Owner' or 'Full' access."
+
+            # Attempt a tiny query to verify data fetch
+            end_date = datetime.date.today().strftime('%Y-%m-%d')
+            request = {'startDate': end_date, 'endDate': end_date, 'rowLimit': 1}
+            self.service.searchanalytics().query(siteUrl=site_url, body=request).execute()
+            
+            return True, f"Successfully connected to {site_url} with {perm} access."
+        except Exception as e:
+            return False, f"GSC Connection Test Failed: {str(e)}"
+
     def get_striking_distance_keywords(self):
         """
         Spec 6: Module F - Identify 'Striking Distance' keywords (Avg Position 11-25).

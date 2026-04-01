@@ -124,6 +124,28 @@ def test_generate_strike_report(mock_gsc_manager, tmpdir):
         mock_gsc_manager.generate_strike_report(striking_df)
         mock_open.assert_called()
 
+def test_test_connection_success(mock_gsc_manager):
+    # Mock list_sites with Owner access
+    mock_gsc_manager.service.sites().list().execute.return_value = {
+        'siteEntry': [{'siteUrl': 'https://livingsystems.ca/', 'permissionLevel': 'siteOwner'}]
+    }
+    # Mock query to succeed
+    mock_gsc_manager.service.searchanalytics().query().execute.return_value = {}
+    
+    success, message = mock_gsc_manager.test_connection()
+    assert success is True
+    assert "Successfully connected" in message
+
+def test_test_connection_fail_permission(mock_gsc_manager):
+    # Mock list_sites with Unverified access
+    mock_gsc_manager.service.sites().list().execute.return_value = {
+        'siteEntry': [{'siteUrl': 'https://livingsystems.ca/', 'permissionLevel': 'siteUnverifiedUser'}]
+    }
+    
+    success, message = mock_gsc_manager.test_connection()
+    assert success is False
+    assert "Insufficient permissions" in message
+
 def test_generate_report(mock_gsc_manager, tmpdir):
     report_path = os.path.join(tmpdir, "gsc_strategic_gap.md")
     
