@@ -1,0 +1,81 @@
+{
+  "client": {
+    "name": "Living Systems Counselling",
+    "domain": "livingsystems.ca",
+    "da": 35,
+    "location": "North Vancouver, BC",
+    "framework": "Bowen Family Systems Theory"
+  },
+  "auth": {
+    "gsc_client_secrets": "/Users/davemini2/ProjectsLocal/serp-main/client_secret_275180378889-d0pki2mc14fq90eh4mo3hfsv1ubinnsc.apps.googleusercontent.com.json",
+    "gsc_property_url": "https://livingsystems.ca/",
+    "scopes": ["https://www.googleapis.com/auth/webmasters.readonly"]
+  },
+  "gsc_settings": {
+    "date_range_days": 90,
+    "ctr_threshold": 0.01,
+    "position_target_max": 20
+  },
+  "technical": {
+    "database_path": "living_systems_intel.db",
+    "feasibility_threshold": 5,
+    "max_audit_pages_per_domain": 3,
+    "moderate_feasibility_max_gap": 15,
+    "score_normaliser": 30.0,
+    "scoring_weights": {
+      "tier_1_medical": 1.0,
+      "tier_2_systems": 0.5,
+      "tier_3_bowen": 2.0
+    },
+    "penalty_thresholds": {
+      "tier_1_max": 10,
+      "tier_2_penalty_multiplier": 0.5,
+      "pseudo_systems_threshold": 1
+    }
+  },
+  "stop_words": [
+    "the", "and", "to", "of", "a", "in", "is", "for", "on", "with", "as", "at", "by", "an", "be", "or", "are", "from", "that",
+    "this", "it", "we", "our", "us", "can", "will", "your", "you", "my", "me", "not", "have", "has", "but", "so", "if", "their", "they",
+    "vancouver", "bc", "british", "columbia", "canada", "north", "west", "counselling", "counseling", "therapy", "therapist",
+    "counsellor", "counselor", "service", "services", "clinic", "centre", "center", "help", "support",
+    "highlytrained"
+  ],
+  "clinical": {
+    "tier_1_medical": [
+      "symptom", "symptoms", "treatment", "disorder", "disorders", "diagnosis", "clinical", 
+      "patient", "patients", "therapy", "medical", "disease", "medication", 
+      "prognosis", "pathology", "syndrome", "condition", "healthcare",
+      "illness", "trauma"
+    ],
+    "tier_2_systems": [
+      "differentiation", "triangles", "chronic anxiety", "emotional system",
+      "family of origin", "nuclear family", "multigenerational", "process",
+      "relationship", "self-regulation", "emotional process", "functioning",
+      "connectedness", "systemic", "interdependence",
+      "internal family systems", "estrangement", "triangulation",
+      "attachment", "avoidant"
+    ],
+    "tier_3_bowen": [
+      "defining self", "over-under functioning", "functional facts", 
+      "emotional distance", "emotional fusion", "differentiation of self",
+      "triangling", "emotional cutoff", "sibling position",
+      "pursuer-distancer reciprocity"
+    ]
+  },
+  "filtering": {
+    "aggregators": [
+      "psychologytoday.com",
+      "yelp.ca",
+      "yellowpages.ca",
+      "healthgrades.com",
+      "counsellingbc.com",
+      "therapytribe.com",
+      "theravive.com",
+      "firstsession.com",
+      "luminohealth.sunlife.ca",
+      "ratemds.com",
+      "betterhelp.com",
+      "talkspace.com"
+    ]
+  }
+}

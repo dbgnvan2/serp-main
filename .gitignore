@@ -1,0 +1,14 @@
+*.db
+token.json
+.DS_Store
+venv/
+__pycache__/
+*.xlsx
+.env
+client_secret_*.json
+google-secrets.txt
+token.json
+*.db
+.DS_Store
+venv/
+__pycache__/

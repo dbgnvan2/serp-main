@@ -1,0 +1,341 @@
+import sys
+import datetime
+import os
+import json
+import glob
+from src.api_clients import DataForSEOClient, MozClient
+from src.semantic import SemanticAuditor
+from src.analysis import AnalysisEngine
+from src.database import DatabaseManager
+from typing import Dict, Set, List, Tuple, Any
+from src.reporting import ReportGenerator
+from src.reframe_engine import ReframeEngine
+from src.velocity_module import VelocityTracker
+from src.gsc_performance import GSCManager
+
+# Paths relative to the project root
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+SHARED_CONFIG_PATH = os.path.join(PROJECT_ROOT, "shared_config.json")
+MANUAL_TARGETS_PATH = os.path.join(PROJECT_ROOT, "manual_targets.json")
+KEYWORD_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "serp-keyword", "output")
+
+def load_shared_config():
+    if os.path.exists(SHARED_CONFIG_PATH):
+        with open(SHARED_CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    return {}
+
+def get_latest_market_data() -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    """
+    Spec 1: Automatic Handover (Radar-to-Sniper Bridge)
+    Ingest the newest JSON from serp-keyword/output/
+    Returns: (list of target entries, dict of keyword -> paa_questions)
+    Target entry: {"domain": str, "url": str, "primary_keyword": str, "est_traffic": float}
+    """
+    json_files = glob.glob(os.path.join(KEYWORD_OUTPUT_DIR, "market_analysis_*.json"))
+    
+    if not json_files:
+        print(f"⚠️ No files found in {KEYWORD_OUTPUT_DIR}. Checking root for fallback...")
+        if os.path.exists(MANUAL_TARGETS_PATH):
+            print(f"📦 Loading fallback from {MANUAL_TARGETS_PATH}")
+            with open(MANUAL_TARGETS_PATH, 'r') as f:
+                data = json.load(f)
+                # Map manual targets to consistent format
+                targets = [{"domain": d, "url": f"https://{d}", "primary_keyword": "manual_audit", "est_traffic": 0} 
+                           for d in data.get("competitors", [])]
+                return targets, {}
+        return [], {}
+
+    # 1. Latest File Detection
+    latest_file = max(json_files, key=os.path.getmtime)
+    print(f"📦 Ingesting latest market data from: {latest_file}")
+    
+    with open(latest_file, 'r') as f:
+        data = json.load(f)
+    
+    targets = []
+    # 2. Expert Filter: Relevance Check & Context Mapping
+    if "organic_results" in data:
+        for res in data["organic_results"]:
+            url = res.get("Link")
+            keyword = res.get("Source_Keyword")
+            
+            # Relevance Check: Only ingest entries that contain both a competitor_url and primary_keyword
+            if url and keyword:
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc.replace('www.', '')
+                
+                # Context Mapping: Source: est_traffic -> Target: priority_rank (priority sorted by traffic later)
+                # Source: primary_keyword -> Target: anchor_concept
+                targets.append({
+                    "domain": domain,
+                    "url": url,
+                    "primary_keyword": keyword,
+                    "est_traffic": res.get("Word_Count") if isinstance(res.get("Word_Count"), (int, float)) else 0 # Word_Count as proxy for traffic if ETV missing in this JSON
+                })
+    
+    # 3. Anxiety Loop Sync: Source: paa_questions -> Target: reframe_context
+    paa_data = {}
+    if "paa_questions" in data:
+        for paa in data["paa_questions"]:
+            kw = paa.get("Source_Keyword")
+            question = paa.get("Question")
+            if kw and question:
+                if kw not in paa_data:
+                    paa_data[kw] = []
+                paa_data[kw].append(question)
+                
+    return targets, paa_data
+
+def pre_flight_check():
+    """
+    Validate all credentials and API health before starting a costly run.
+    """
+    print("--- 🛠️ Pre-Flight Check ---")
+    required_vars = [
+        "DATAFORSEO_LOGIN", "DATAFORSEO_PASSWORD", 
+        "OPENAI_API_KEY", "MOZ_TOKEN"
+    ]
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        print(f"❌ Missing environment variables: {', '.join(missing)}")
+        return False
+
+    # 1. Check DataForSEO Balance
+    try:
+        dfs = DataForSEOClient()
+        import requests
+        r = requests.get(
+            'https://api.dataforseo.com/v3/appendix/user_data', 
+            auth=(dfs.login, dfs.password)
+        ).json()
+        balance = r['tasks'][0]['result'][0]['money']['balance']
+        if balance <= 0:
+            print(f"❌ DataForSEO balance is too low: {balance}")
+            return False
+        print(f"✅ DataForSEO Balance: ${balance}")
+    except Exception as e:
+        print(f"❌ DataForSEO Connectivity Error: {e}")
+        return False
+
+    # 2. Check OpenAI connectivity
+    try:
+        reframe = ReframeEngine()
+        if reframe.client:
+            reframe.client.models.retrieve(reframe.model)
+            print(f"✅ OpenAI Model Ready: {reframe.model}")
+    except Exception as e:
+        print(f"❌ OpenAI Connectivity Error: {e}")
+        return False
+
+    # 3. Check GSC Connectivity (Optional/Soft-Fail)
+    try:
+        shared_config = load_shared_config()
+        secrets_path = shared_config.get("auth", {}).get("gsc_client_secrets")
+        if secrets_path and os.path.exists(secrets_path):
+            print("✅ GSC Credentials Found.")
+        else:
+            print("⚠️ GSC Credentials not found. Skipping internal gap analysis.")
+    except Exception as e:
+        print(f"⚠️ GSC Check Error: {e}")
+
+    print("✅ All systems go. Starting Audit...\n")
+    return True
+
+def run_audit():
+    if not pre_flight_check():
+        print("🛑 Pre-flight check failed. Aborting run.")
+        sys.exit(1)
+
+    shared_config = load_shared_config()
+    aggregators = shared_config.get("filtering", {}).get("aggregators", [])
+    client_domain = shared_config.get("client", {}).get("domain", "livingsystems.ca")
+
+    # 1. Foundation: Dynamic Handover & Velocity Tracker
+    targets_raw, paa_map = get_latest_market_data()
+    if not targets_raw:
+        print("❌ No competitors identified. Aborting.")
+        return
+
+    db = DatabaseManager()
+    velocity = VelocityTracker(SHARED_CONFIG_PATH)
+    run_id = db.create_run(client_domain)
+    print(f"Created new Audit Run ID: {run_id}")
+    
+    # 2. API Clients
+    dfs_client = DataForSEOClient()
+    moz_client = MozClient()
+    reframe_engine = ReframeEngine()
+    
+    # 3. Engines
+    auditor = SemanticAuditor()
+    reporter = ReportGenerator()
+
+    # 4. Optional: Internal GSC Analysis
+    gsc_findings = None
+    try:
+        gsc = GSCManager()
+        print("🔍 Running Internal GSC Gap Analysis...")
+        target_gaps, low_hanging, mismatches = gsc.analyze_gaps()
+        if not target_gaps.empty or not low_hanging.empty or mismatches:
+            gsc_findings = {
+                "target_gaps": target_gaps,
+                "low_hanging": low_hanging,
+                "mismatches": mismatches
+            }
+            print(f"✅ GSC Analysis complete: {len(target_gaps)} gaps, {len(low_hanging)} low-hanging, {len(mismatches)} mismatches.")
+        else:
+            print("ℹ️ No significant GSC gaps found or access restricted.")
+    except Exception as e:
+        print(f"⚠️ GSC Analysis skipped: {e}")
+    
+    competitor_keywords: Dict[str, Set[str]] = {}
+    all_metrics_to_save = []
+    
+    print(f"Starting audit for {client_domain}...")
+    
+    # Track domains already processed in this run to avoid duplicate work
+    processed_domains = set()
+
+    # 4. Ingestion & Expert Filtering
+    for target in targets_raw:
+        domain = target["domain"]
+        if domain in processed_domains:
+            continue
+            
+        # Aggregator Exclusion: Cross-reference the filtering.aggregators list
+        if domain in aggregators:
+            print(f"Skipping aggregator: {domain}")
+            continue
+            
+        print(f"Analyzing competitor: {domain}")
+        pages = dfs_client.get_relevant_pages(domain)
+        if not pages:
+            processed_domains.add(domain)
+            continue
+
+        # Moz metrics for filtering
+        urls = [p.get('ranked_serp_element', {}).get('serp_item', {}).get('url') for p in pages]
+        urls = [u for u in urls if u]
+        moz_metrics_map = {}
+        try:
+            moz_results = moz_client.get_url_metrics(urls)
+            for res in moz_results:
+                moz_metrics_map[res.get('url')] = res.get('page_authority') or res.get('pa') or 0
+        except Exception as e:
+            print(f"  Warning: Moz metrics failed: {e}")
+
+        # Expert Filter: DA Threshold: Skip any domain where Domain Authority > 50
+        # (Heuristic: Use average PA if DA not direct)
+        avg_pa = sum(moz_metrics_map.values()) / len(moz_metrics_map) if moz_metrics_map else 0
+        if avg_pa > 50:
+            print(f"  Skipping high-authority domain (Avg PA {avg_pa:.1f} > 50): {domain}")
+            processed_domains.add(domain)
+            continue
+
+        domain_medical_total = 0
+        domain_t2_total = 0
+        domain_t3_total = 0
+        domain_traffic_total = 0
+        domain_keywords = set()
+        processed_urls = set() # Track URLs processed for this domain
+
+        for page in pages:
+            serp_item = page.get('ranked_serp_element', {}).get('serp_item', {})
+            url = serp_item.get('url')
+            if not url: continue
+            
+            keyword = page.get('keyword_data', {}).get('keyword') or page.get('keyword')
+            pos = serp_item.get('rank_absolute')
+            traffic = serp_item.get('etv') or 0
+            
+            if keyword:
+                domain_keywords.add(keyword)
+                
+            all_metrics_to_save.append({
+                "domain": domain,
+                "url": url,
+                "keyword": keyword,
+                "position": pos,
+                "traffic": traffic
+            })
+            
+            pa = moz_metrics_map.get(url, 0)
+            db.save_competitor_history(run_id, url, pos, pa, traffic)
+            
+            max_pages = shared_config.get("technical", {}).get("max_audit_pages_per_domain", 3)
+            
+            # Deduplicate: only scrape if not already done in this run
+            if url not in processed_urls and len(processed_urls) < max_pages:
+                content = auditor.scrape_content(url)
+                if content:
+                    scores = auditor.analyze_text(content)
+                    db.save_semantic_audit(url, scores['medical_score'], scores['systems_score'], run_id=run_id, label=scores.get('systemic_label', 'Standard'))
+                    db.save_traffic_magnet(run_id, domain, url, keyword, traffic, scores['medical_score'], scores['systems_score'], label=scores.get('systemic_label', 'Standard'))
+                    print(f"  Audit {url}: Medical {scores['medical_score']}, Systems {scores['systems_score']} ({scores.get('systemic_label')})")
+                    
+                    # Spec 4: Save every audit result (DA, Rank, Scores) into market_history
+                    velocity.save_market_snapshot(
+                        domain=domain,
+                        url=url,
+                        keyword=keyword,
+                        rank=pos,
+                        da=pa, # Using PA as proxy for DA at URL level
+                        systems_score=scores['systems_score'],
+                        medical_score=scores['medical_score']
+                    )
+
+                    domain_medical_total += scores['medical_score']
+                    domain_t2_total += scores.get('t2_count', 0)
+                    domain_t3_total += scores.get('t3_count', 0)
+                    domain_traffic_total += traffic
+                    processed_urls.add(url)
+
+        db.tag_competitor_position(domain, domain_medical_total, domain_t2_total, domain_t3_total, domain_traffic_total)
+        competitor_keywords[domain] = domain_keywords
+        processed_domains.add(domain)
+
+    if all_metrics_to_save:
+        db.save_competitor_metrics(all_metrics_to_save, run_id=run_id)
+
+    # Strategic Logic with PAA context from Handover
+    print("Identifying Strategic Openings...")
+    openings = db.identify_strategic_openings(run_id)
+    reframes = []
+    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    
+    for opening in openings:
+        # Pull paa_questions as reframe_context
+        paa_questions = paa_map.get(opening['keyword'], [])
+        
+        # Integration: Reframe_Engine pull paa_questions as primary evidence
+        reframe_result = reframe_engine.generate_bowen_reframe(
+            opening['keyword'], opening['url'], opening['medical_score'], paa_questions=paa_questions
+        )
+        
+        usage = reframe_result.get("usage", {})
+        for key in total_usage:
+            total_usage[key] += usage.get(key, 0)
+
+        reframes.append({
+            "keyword": opening['keyword'],
+            "url": opening['url'],
+            "paa": paa_questions,
+            "reframe": reframe_result["reframe"]
+        })
+
+    # Spec 4: Get market velocity alerts
+    market_alerts = velocity.get_market_alerts()
+
+    reporter.generate_summary(
+        client_domain, 
+        expected_competitors=list(competitor_keywords.keys()), 
+        run_id=run_id, 
+        reframes=reframes,
+        token_usage=total_usage,
+        market_alerts=market_alerts,
+        gsc_findings=gsc_findings
+    )
+
+if __name__ == "__main__":
+    run_audit()

@@ -1,0 +1,31 @@
+# Serp-comp SEO Intelligence Report
+**Client:** livingsystems.ca
+**Date:** 2026-03-30 15:52:56
+
+## Executive Summary
+This report identifies 'Traffic Magnets' and semantic gaps between your site and top competitors.
+
+### Competitor Ranking Summary
+| domain             |   top_pages |   total_keywords |   avg_pos |
+|:-------------------|------------:|-----------------:|----------:|
+| thrivedowntown.com |           4 |               10 |       4.1 |
+
+### Identified 'Traffic Magnets'
+| domain             | url                                                          | keyword                     |   position |   traffic |
+|:-------------------|:-------------------------------------------------------------|:----------------------------|-----------:|----------:|
+| thrivedowntown.com | https://thrivedowntown.com/what-is-an-introvert-personality/ | introvert personality       |          6 |    46.704 |
+| thrivedowntown.com | https://thrivedowntown.com/                                  | thrive counselling downtown |          1 |    27.36  |
+| thrivedowntown.com | https://thrivedowntown.com/                                  | thrive downtown             |          1 |    27.36  |
+| thrivedowntown.com | https://thrivedowntown.com/                                  | thrive vancouver            |          1 |    21.28  |
+| thrivedowntown.com | https://thrivedowntown.com/psychedelic-therapy-vancouver/    | psychedelic vancouver       |          6 |    14.58  |
+| thrivedowntown.com | https://thrivedowntown.com/christmas-depression/             | depressed xmas              |          4 |    13.622 |
+| thrivedowntown.com | https://thrivedowntown.com/christmas-depression/             | xmas depression             |          5 |    13.622 |
+| thrivedowntown.com | https://thrivedowntown.com/psychedelic-therapy-vancouver/    | dmt vancouver               |          3 |    10.703 |
+| thrivedowntown.com | https://thrivedowntown.com/christmas-depression/             | christmas is depressing     |          7 |     9.226 |
+| thrivedowntown.com | https://thrivedowntown.com/psychedelic-therapy-vancouver/    | psychedelics vancouver      |          7 |     8.757 |
+
+## Bowen Reframe Opportunity
+High medical scores with low systems scores indicate a prime opportunity for differentiation.
+| url                         |   Medical Model |   Systems Model |
+|:----------------------------|----------------:|----------------:|
+| https://thrivedowntown.com/ |               9 |               0 |
