@@ -99,7 +99,7 @@ def pre_flight_check():
     missing = [var for var in required_vars if not os.getenv(var)]
     if missing:
         print(f"❌ Missing environment variables: {', '.join(missing)}")
-        return False
+        return None
 
     # 1. Check DataForSEO Balance
     try:
@@ -112,11 +112,11 @@ def pre_flight_check():
         balance = r['tasks'][0]['result'][0]['money']['balance']
         if balance <= 0:
             print(f"❌ DataForSEO balance is too low: {balance}")
-            return False
+            return None
         print(f"✅ DataForSEO Balance: ${balance}")
     except Exception as e:
         print(f"❌ DataForSEO Connectivity Error: {e}")
-        return False
+        return None
 
     # 2. Check OpenAI connectivity
     try:
@@ -126,36 +126,50 @@ def pre_flight_check():
             print(f"✅ OpenAI Model Ready: {reframe.model}")
     except Exception as e:
         print(f"❌ OpenAI Connectivity Error: {e}")
-        return False
+        return None
 
     # 3. Check GSC Connectivity (Mandatory - Hard Fail)
+    gsc = None
     try:
         shared_config = load_shared_config()
         secrets_path = shared_config.get("auth", {}).get("gsc_client_secrets")
         if not secrets_path or not os.path.exists(secrets_path):
             print("❌ GSC Credentials not found. Please provide path to GSC Client Secrets in shared_config.json.")
-            return False
+            return None
             
         gsc = GSCManager()
         success, message = gsc.test_connection()
         if not success:
             print(f"❌ GSC Connectivity Error: {message}")
-            return False
+            return None
         print(f"✅ GSC Connection Verified: {message}")
     except Exception as e:
         print(f"❌ GSC Check Error: {e}")
-        return False
+        return None
 
     print("✅ All systems go. Starting Audit...\n")
-    return True
+    return gsc
+
+def load_omitted_domains(config):
+    """
+    Load domains to skip from the external text file.
+    """
+    path_rel = config.get("filtering", {}).get("omitted_domains_path", "omitted_domains.txt")
+    # Path is relative to project root
+    path = os.path.join(PROJECT_ROOT, path_rel)
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            return set(line.strip().lower() for line in f if line.strip())
+    return set()
 
 def run_audit():
-    if not pre_flight_check():
+    gsc = pre_flight_check()
+    if not gsc:
         print("🛑 Pre-flight check failed. Aborting run.")
         sys.exit(1)
 
     shared_config = load_shared_config()
-    aggregators = shared_config.get("filtering", {}).get("aggregators", [])
+    omitted_domains = load_omitted_domains(shared_config)
     client_domain = shared_config.get("client", {}).get("domain", "livingsystems.ca")
 
     # 1. Foundation: Dynamic Handover & Velocity Tracker
@@ -163,6 +177,14 @@ def run_audit():
     if not targets_raw:
         print("❌ No competitors identified. Aborting.")
         return
+
+    # Optimization 1: Group by domain
+    domain_groups = {}
+    for t in targets_raw:
+        d = t["domain"]
+        if d not in domain_groups:
+            domain_groups[d] = []
+        domain_groups[d].append(t)
 
     db = DatabaseManager()
     velocity = VelocityTracker(SHARED_CONFIG_PATH)
@@ -181,7 +203,6 @@ def run_audit():
     # 4. Optional: Internal GSC Analysis
     gsc_findings = None
     try:
-        gsc = GSCManager()
         print("🔍 Running Internal GSC Gap Analysis...")
         target_gaps, low_hanging, mismatches = gsc.analyze_gaps()
         if not target_gaps.empty or not low_hanging.empty or mismatches:
@@ -195,30 +216,23 @@ def run_audit():
             print("ℹ️ No significant GSC gaps found or access restricted.")
     except Exception as e:
         print(f"⚠️ GSC Analysis skipped: {e}")
+
     
     competitor_keywords: Dict[str, Set[str]] = {}
     all_metrics_to_save = []
     
     print(f"Starting audit for {client_domain}...")
     
-    # Track domains already processed in this run to avoid duplicate work
-    processed_domains = set()
-
     # 4. Ingestion & Expert Filtering
-    for target in targets_raw:
-        domain = target["domain"]
-        if domain in processed_domains:
-            continue
-            
-        # Aggregator Exclusion: Cross-reference the filtering.aggregators list
-        if domain in aggregators:
-            print(f"Skipping aggregator: {domain}")
+    for domain, group_targets in domain_groups.items():
+        # Aggregator/Omitted Exclusion: Cross-reference the external omitted_domains list
+        if domain in omitted_domains:
+            print(f"Skipping omitted domain: {domain}")
             continue
             
         print(f"Analyzing competitor: {domain}")
         pages = dfs_client.get_relevant_pages(domain)
         if not pages:
-            processed_domains.add(domain)
             continue
 
         # Moz metrics for filtering
@@ -233,11 +247,9 @@ def run_audit():
             print(f"  Warning: Moz metrics failed: {e}")
 
         # Expert Filter: DA Threshold: Skip any domain where Domain Authority > 50
-        # (Heuristic: Use average PA if DA not direct)
         avg_pa = sum(moz_metrics_map.values()) / len(moz_metrics_map) if moz_metrics_map else 0
         if avg_pa > 50:
             print(f"  Skipping high-authority domain (Avg PA {avg_pa:.1f} > 50): {domain}")
-            processed_domains.add(domain)
             continue
 
         domain_medical_total = 0
@@ -246,8 +258,12 @@ def run_audit():
         domain_traffic_total = 0
         domain_keywords = set()
         processed_urls = set() # Track URLs processed for this domain
+        domain_blocked = False
 
         for page in pages:
+            if domain_blocked:
+                break
+                
             serp_item = page.get('ranked_serp_element', {}).get('serp_item', {})
             url = serp_item.get('url')
             if not url: continue
@@ -272,35 +288,51 @@ def run_audit():
             
             max_pages = shared_config.get("technical", {}).get("max_audit_pages_per_domain", 3)
             
-            # Deduplicate: only scrape if not already done in this run
+            # Optimization 3: Only scrape if not audited in last 7 days
             if url not in processed_urls and len(processed_urls) < max_pages:
-                content = auditor.scrape_content(url)
-                if content:
-                    scores = auditor.analyze_text(content)
-                    db.save_semantic_audit(url, scores['medical_score'], scores['systems_score'], run_id=run_id, label=scores.get('systemic_label', 'Standard'))
-                    db.save_traffic_magnet(run_id, domain, url, keyword, traffic, scores['medical_score'], scores['systems_score'], label=scores.get('systemic_label', 'Standard'))
-                    print(f"  Audit {url}: Medical {scores['medical_score']}, Systems {scores['systems_score']} ({scores.get('systemic_label')})")
-                    
-                    # Spec 4: Save every audit result (DA, Rank, Scores) into market_history
-                    velocity.save_market_snapshot(
-                        domain=domain,
-                        url=url,
-                        keyword=keyword,
-                        rank=pos,
-                        da=pa, # Using PA as proxy for DA at URL level
-                        systems_score=scores['systems_score'],
-                        medical_score=scores['medical_score']
-                    )
+                processed_urls.add(url) # Mark as attempted IMMEDIATELY to avoid re-scrape loops
+                
+                cached_audit = db.was_audited_recently(url)
+                if cached_audit:
+                    scores = cached_audit
+                    print(f"  ⚡ Using cached audit for {url} (fresh within 7 days)")
+                else:
+                    # Double check we don't scrape the same URL if it was already processed in this domain loop
+                    content = auditor.scrape_content(url)
+                    if content == "BLOCK":
+                        print(f"  🛑 Circuit Breaker: Domain {domain} is blocking us (429). Skipping remaining pages.")
+                        domain_blocked = True
+                        continue
+                    elif content:
+                        scores = auditor.analyze_text(content)
+                        db.save_semantic_audit(url, scores['medical_score'], scores['systems_score'], run_id=run_id, label=scores.get('systemic_label', 'Standard'))
+                    else:
+                        # Logic: If we hit a major error other than 429, scrape_content returns ""
+                        continue
 
-                    domain_medical_total += scores['medical_score']
-                    domain_t2_total += scores.get('t2_count', 0)
-                    domain_t3_total += scores.get('t3_count', 0)
-                    domain_traffic_total += traffic
-                    processed_urls.add(url)
+                db.save_traffic_magnet(run_id, domain, url, keyword, traffic, scores['medical_score'], scores['systems_score'], label=scores.get('systemic_label', 'Standard'))
+                print(f"  Audit {url}: Medical {scores['medical_score']}, Systems {scores['systems_score']} ({scores.get('systemic_label')})")
+                
+                # Spec 4: Save every audit result (DA, Rank, Scores) into market_history
+                velocity.save_market_snapshot(
+                    domain=domain,
+                    url=url,
+                    keyword=keyword,
+                    rank=pos,
+                    da=pa, # Using PA as proxy for DA at URL level
+                    systems_score=scores['systems_score'],
+                    medical_score=scores['medical_score']
+                )
+
+                domain_medical_total += scores['medical_score']
+                # Correctly handle potential missing T2/T3 in cached audit
+                domain_t2_total += scores.get('t2_count', 0) if not cached_audit else (scores['systems_score'] / 0.5 if scores['systems_score'] < 2.0 else 0) # Rough estimate for cache
+                domain_t3_total += scores.get('t3_count', 0) if not cached_audit else (scores['systems_score'] / 2.0 if scores['systems_score'] >= 2.0 else 0)
+                domain_traffic_total += traffic
+                processed_urls.add(url)
 
         db.tag_competitor_position(domain, domain_medical_total, domain_t2_total, domain_t3_total, domain_traffic_total)
         competitor_keywords[domain] = domain_keywords
-        processed_domains.add(domain)
 
     if all_metrics_to_save:
         db.save_competitor_metrics(all_metrics_to_save, run_id=run_id)

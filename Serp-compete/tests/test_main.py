@@ -1,6 +1,29 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from src.main import pre_flight_check
+from src.main import pre_flight_check, load_omitted_domains
+
+def test_load_omitted_domains(tmpdir):
+    # Create a temporary omitted_domains.txt
+    omitted_file = tmpdir.join("omitted_domains.txt")
+    omitted_file.write("example.com\nTEST.CA\n  \n  spaces.com  ")
+    
+    mock_config = {
+        "filtering": {
+            "omitted_domains_path": str(omitted_file)
+        }
+    }
+    
+    # We need to patch PROJECT_ROOT or just mock the path logic
+    # Since load_omitted_domains uses os.path.join(PROJECT_ROOT, path_rel)
+    # let's patch PROJECT_ROOT in src.main
+    with patch('src.main.PROJECT_ROOT', ""):
+        # If path_rel is absolute, os.path.join("", path_rel) returns path_rel
+        domains = load_omitted_domains(mock_config)
+        
+    assert "example.com" in domains
+    assert "test.ca" in domains
+    assert "spaces.com" in domains
+    assert len(domains) == 3
 
 @patch('src.main.DataForSEOClient')
 @patch('src.main.ReframeEngine')

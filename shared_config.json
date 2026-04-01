@@ -63,31 +63,6 @@
     ]
   },
   "filtering": {
-    "aggregators": [
-      "psychologytoday.com",
-      "yelp.ca",
-      "yellowpages.ca",
-      "healthgrades.com",
-      "counsellingbc.com",
-      "therapytribe.com",
-      "theravive.com",
-      "firstsession.com",
-      "luminohealth.sunlife.ca",
-      "ratemds.com",
-      "betterhelp.com",
-      "talkspace.com",
-      "facebook.com",
-      "instagram.com",
-      "linkedin.com",
-      "mapquest.com",
-      "bing.com",
-      "google.com",
-      "foundrybc.ca",
-      "healthlinkbc.ca",
-      "vancouver.pathwaysbc.ca",
-      "pathwaysmedicalcare.ca",
-      "theshipyardsdistrict.ca",
-      "rcav.org"
-    ]
+    "omitted_domains_path": "omitted_domains.txt"
   }
 }
