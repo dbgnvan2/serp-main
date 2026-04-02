@@ -17,9 +17,9 @@ serpapi:
   related_questions_ai_max_calls: 5
 files:
   input_csv: keywords_Couple_Marriage_RelationshipLocal.csv
-  output_xlsx: output/market_analysis_couple_marriage_relationshiplocal_20260331_1542.xlsx
-  output_json: output/market_analysis_couple_marriage_relationshiplocal_20260331_1542.json
-  output_md: output/market_analysis_couple_marriage_relationshiplocal_20260331_1542.md
+  output_xlsx: output/market_analysis_couple_marriage_relationshiplocal_20260401_1810.xlsx
+  output_json: output/market_analysis_couple_marriage_relationshiplocal_20260401_1810.json
+  output_md: output/market_analysis_couple_marriage_relationshiplocal_20260401_1810.md
   domain_overrides: domain_overrides.yml
 enrichment:
   enabled: true
