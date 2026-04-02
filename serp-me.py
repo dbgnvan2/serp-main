@@ -397,9 +397,9 @@ class SerpLauncherApp:
     def build_output_names(self, topic_slug):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         return {
-            "output_xlsx": f"market_analysis_{topic_slug}_{timestamp}.xlsx",
-            "output_json": f"market_analysis_{topic_slug}_{timestamp}.json",
-            "output_md": f"market_analysis_{topic_slug}_{timestamp}.md",
+            "output_xlsx": f"output/market_analysis_{topic_slug}_{timestamp}.xlsx",
+            "output_json": f"output/market_analysis_{topic_slug}_{timestamp}.json",
+            "output_md": f"output/market_analysis_{topic_slug}_{timestamp}.md",
             "report_out": f"content_opportunities_{topic_slug}_{timestamp}.md",
             "advisory_out": f"advisory_briefing_{topic_slug}_{timestamp}.md",
             "feasibility_out": f"feasibility_{topic_slug}_{timestamp}.md",
@@ -410,13 +410,16 @@ class SerpLauncherApp:
             rf"^{re.escape(prefix)}_{re.escape(topic_slug)}(?:_\d{{8}}_\d{{4}})?{re.escape(extension)}$"
         )
         matches = []
-        cwd = os.getcwd()
-        for name in os.listdir(cwd):
-            if not pattern.match(name):
-                continue
-            path = os.path.join(cwd, name)
-            if os.path.isfile(path):
-                matches.append((os.path.getmtime(path), path))
+        # Check both cwd and output/ directory
+        search_dirs = [os.getcwd(), os.path.join(os.getcwd(), "output")]
+        for sdir in search_dirs:
+            if not os.path.exists(sdir): continue
+            for name in os.listdir(sdir):
+                if not pattern.match(name):
+                    continue
+                path = os.path.join(sdir, name)
+                if os.path.isfile(path):
+                    matches.append((os.path.getmtime(path), path))
         if not matches:
             return None
         matches.sort(key=lambda item: item[0], reverse=True)
@@ -427,13 +430,16 @@ class SerpLauncherApp:
             rf"^{re.escape(prefix)}_.+?(?:_\d{{8}}_\d{{4}})?{re.escape(extension)}$"
         )
         matches = []
-        cwd = os.getcwd()
-        for name in os.listdir(cwd):
-            if not pattern.match(name):
-                continue
-            path = os.path.join(cwd, name)
-            if os.path.isfile(path):
-                matches.append((os.path.getmtime(path), path))
+        # Check both cwd and output/ directory
+        search_dirs = [os.getcwd(), os.path.join(os.getcwd(), "output")]
+        for sdir in search_dirs:
+            if not os.path.exists(sdir): continue
+            for name in os.listdir(sdir):
+                if not pattern.match(name):
+                    continue
+                path = os.path.join(sdir, name)
+                if os.path.isfile(path):
+                    matches.append((os.path.getmtime(path), path))
         if not matches:
             return None
         matches.sort(key=lambda item: item[0], reverse=True)

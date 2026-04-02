@@ -23,19 +23,27 @@ from __future__ import annotations
 import random as _random
 from typing import Literal
 
-# ---------------------------------------------------------------------------
-# Feasibility thresholds
-# ---------------------------------------------------------------------------
+import json
+import os
 
-#: Gap ≤ this value  →  High Feasibility
-HIGH_FEASIBILITY_MAX_GAP: int = 5
+SHARED_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "shared_config.json")
 
-#: Gap ≤ this value (and > HIGH)  →  Moderate Feasibility
-MODERATE_FEASIBILITY_MAX_GAP: int = 15
+def load_thresholds():
+    if os.path.exists(SHARED_CONFIG_PATH):
+        try:
+            with open(SHARED_CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+                tech = config.get("technical", {})
+                return (
+                    tech.get("feasibility_threshold", 5),
+                    tech.get("moderate_feasibility_max_gap", 15),
+                    tech.get("score_normaliser", 30.0)
+                )
+        except Exception:
+            pass
+    return 5, 15, 30.0
 
-#: Divisor used to normalise gap into a 0–1 score.
-#: A gap of SCORE_NORMALISER or more maps to a score of 0.0.
-SCORE_NORMALISER: float = 30.0
+HIGH_FEASIBILITY_MAX_GAP, MODERATE_FEASIBILITY_MAX_GAP, SCORE_NORMALISER = load_thresholds()
 
 StatusLiteral = Literal["High Feasibility", "Moderate Feasibility", "Low Feasibility"]
 
