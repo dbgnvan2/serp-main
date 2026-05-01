@@ -78,6 +78,9 @@ feasibility:
   - Lynn Valley
   - Deep Cove
   - Canyon Heights
+audit_targets:
+  n: 10                  # top N organic URLs per keyword sent to Tool 2
+  omit_from_audit: []    # domains never sent to Tool 2 (e.g. major directories)
 analysis_report:
   client_name: Living Systems Counselling
   client_domain: livingsystems.ca

@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from collections import Counter
 import hashlib
+import jsonschema
 import generate_insight_report
 import generate_content_brief
 import yaml
@@ -1424,6 +1425,140 @@ def fetch_autocomplete(keyword):
     return out
 
 
+_HANDOFF_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "handoff_schema.json")
+_HANDOFF_SCHEMA = None
+if os.path.exists(_HANDOFF_SCHEMA_PATH):
+    with open(_HANDOFF_SCHEMA_PATH) as _f:
+        _HANDOFF_SCHEMA = json.load(_f)
+
+
+def build_competitor_handoff(
+    all_organic,
+    run_id,
+    run_timestamp,
+    client_domain,
+    client_brand_names,
+    n=10,
+    omit_from_audit=None,
+):
+    """Build the validated handoff dict for Tool 2 from organic results.
+
+    Selects the top *n* organic URLs per keyword, excluding the client's own
+    domain and any domain in *omit_from_audit*.  Returns the handoff dict; the
+    caller is responsible for writing it.
+    """
+    omit_set = {d.lower() for d in (omit_from_audit or [])}
+    client_domain_lower = (client_domain or "").lower()
+
+    # Build per-keyword top-N lists; simultaneously track primary keyword per URL.
+    # primary_keyword_for_url = keyword where this URL appears at its lowest rank.
+    url_best_rank: dict[str, tuple[int, str]] = {}  # url -> (rank, keyword)
+
+    # First pass: find best (lowest) rank per URL across all keywords
+    for item in all_organic:
+        url = item.get("Link") or item.get("url", "")
+        if not url or url == "N/A":
+            continue
+        try:
+            rank = int(item.get("Rank", 9999))
+        except (TypeError, ValueError):
+            rank = 9999
+        keyword = item.get("Root_Keyword") or item.get("Keyword", "")
+        prev = url_best_rank.get(url)
+        if prev is None or rank < prev[0]:
+            url_best_rank[url] = (rank, keyword)
+
+    # Second pass: build per-keyword top-N candidate sets, applying exclusions
+    seen_urls: set[str] = set()
+    targets: list[dict] = []
+    client_excluded = 0
+    omit_excluded = 0
+    omit_domains_hit: set[str] = set()
+
+    # Group by keyword, preserving rank order
+    from collections import defaultdict
+    by_keyword: dict[str, list] = defaultdict(list)
+    for item in all_organic:
+        url = item.get("Link") or item.get("url", "")
+        if not url or url == "N/A":
+            continue
+        kw = item.get("Root_Keyword") or item.get("Keyword", "")
+        by_keyword[kw].append(item)
+
+    for kw, items in by_keyword.items():
+        # Sort by rank ascending
+        def _rank(i):
+            try:
+                return int(i.get("Rank", 9999))
+            except (TypeError, ValueError):
+                return 9999
+
+        sorted_items = sorted(items, key=_rank)
+        added = 0
+        for item in sorted_items:
+            if added >= n:
+                break
+            url = item.get("Link") or item.get("url", "")
+            if not url or url == "N/A":
+                continue
+            domain = urlparse(url).netloc.lower()
+
+            if domain == client_domain_lower or client_domain_lower in domain:
+                client_excluded += 1
+                continue
+            if domain in omit_set:
+                omit_excluded += 1
+                omit_domains_hit.add(domain)
+                continue
+
+            if url in seen_urls:
+                added += 1
+                continue
+            seen_urls.add(url)
+
+            try:
+                rank_int = int(item.get("Rank", 0))
+            except (TypeError, ValueError):
+                rank_int = 0
+
+            primary_kw = url_best_rank.get(url, (0, kw))[1]
+
+            targets.append({
+                "url": url,
+                "domain": domain,
+                "rank": rank_int,
+                "entity_type": item.get("Entity_Type") or "N/A",
+                "content_type": item.get("Content_Type") or "N/A",
+                "title": item.get("Title") or "",
+                "source_keyword": kw,
+                "primary_keyword_for_url": primary_kw,
+            })
+            added += 1
+
+    handoff = {
+        "schema_version": "1.0",
+        "source_run_id": run_id,
+        "source_run_timestamp": run_timestamp,
+        "client_domain": client_domain or "",
+        "client_brand_names": client_brand_names or [],
+        "targets": targets,
+        "exclusions": {
+            "client_urls_excluded": client_excluded,
+            "omit_list_excluded": omit_excluded,
+            "omit_list_used": sorted(omit_domains_hit),
+        },
+    }
+
+    if _HANDOFF_SCHEMA:
+        try:
+            jsonschema.validate(instance=handoff, schema=_HANDOFF_SCHEMA)
+        except jsonschema.ValidationError as exc:
+            logging.error(f"Handoff schema validation FAILED: {exc.message}")
+            return None
+
+    return handoff
+
+
 def build_help_rows():
     """Guidance rows for why specific sheets may be empty."""
     return [
@@ -2009,6 +2144,38 @@ def main():
         print(f"Saved normalized audit to {norm_path}")
     except Exception as e:
         logging.error(f"Error saving JSON file: {e}")
+
+    # --- COMPETITOR HANDOFF (Tool 2 contract) ---
+    _at_cfg = CONFIG.get("audit_targets", {})
+    _handoff_n = int(_at_cfg.get("n", 10))
+    _omit_from_audit = list(_at_cfg.get("omit_from_audit", []))
+    _client_brand_names = CONFIG.get("analysis_report", {}).get("client_name_patterns", [])
+    _run_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    _slug = _derive_output_slug(INPUT_FILE)
+    _ts_short = datetime.now().strftime("%Y%m%d_%H%M")
+    _handoff_path = os.path.join(
+        os.path.dirname(OUTPUT_JSON),
+        f"competitor_handoff_{_slug}_{_ts_short}.json",
+    )
+    print("Building competitor handoff for Tool 2...")
+    _handoff = build_competitor_handoff(
+        all_organic,
+        run_id=run_id,
+        run_timestamp=_run_ts,
+        client_domain=CLIENT_DOMAIN,
+        client_brand_names=_client_brand_names,
+        n=_handoff_n,
+        omit_from_audit=_omit_from_audit,
+    )
+    if _handoff is not None:
+        try:
+            with open(_handoff_path, "w", encoding="utf-8") as _hf:
+                json.dump(_handoff, _hf, indent=2, ensure_ascii=False)
+            print(f"Saved competitor handoff to {_handoff_path} ({len(_handoff['targets'])} targets)")
+        except Exception as _he:
+            logging.error(f"Error saving competitor handoff: {_he}")
+    else:
+        logging.error("Competitor handoff NOT written due to schema validation failure.")
 
     print("Saving to Excel...")
     try:
