@@ -27,7 +27,7 @@ python3 -m pytest test_*.py -q
 
 Tests do **not** require API keys — all external calls are mocked. The `test_serp_launcher.py` tests are skipped if tkinter is unavailable (headless environments).
 
-Expected: 330 passing, 5 skipped, 0 errors.
+Expected: 358 passing, 5 skipped, 0 errors.
 
 ## Key Entry Points
 
@@ -71,7 +71,8 @@ market_analysis_*.json
 | Module | Role |
 |--------|------|
 | `serp_audit.py` | Main SERP engine — fetches, parses, enriches, tags PAA intent |
-| `generate_content_brief.py` | LLM report generator using Anthropic API |
+| `generate_insight_report.py` | Renders `market_analysis_*.md` — Sections 1–6 including `## 5b. Per-Keyword SERP Intent` and Mixed-Intent Strategic Notes |
+| `generate_content_brief.py` | LLM report generator using Anthropic API; also renders per-recommendation briefs with `## 1a. SERP Intent Context` |
 | `run_feasibility.py` | Standalone DA feasibility analysis and pivot report |
 | `classifiers.py` | Rule-based content & entity type classifiers |
 | `intent_classifier.py` | Tags PAA questions as External Locus / Systemic / General |
@@ -114,6 +115,8 @@ prompts/
 **`domain_overrides.yml`** — manual entity type overrides (e.g., `psychologytoday.com: directory`).
 
 **`intent_mapping.yml`** (spec v2) — rule table mapping `(content_type, entity_type, local_pack, domain_role)` → SERP intent (informational / commercial_investigation / transactional / navigational / local / uncategorised). First-match-wins, top of file = highest priority. Edit this file to refine intent assignments — don't push exceptions into Python.
+
+**`url_pattern_rules.yml`** — URL-path fallback rules for pages the HTML enricher couldn't classify. Edit to improve classification rates without touching Python.
 
 ## Spec v2 Pre-Computed Fields (per keyword_profile)
 
@@ -199,9 +202,11 @@ All schema changes use `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE … ADD COLU
 ## LLM Validation Strategy
 
 `generate_content_brief.py` validates LLM outputs before writing:
-1. Hard-fail (abort): AI Overview count mismatch vs. extracted data; `serp_intent.primary_intent` or `is_mixed` contradictions
-2. Soft-fail (1 retry): Wording issues, `title_patterns.dominant_pattern` contradictions, `mixed_intent_strategy` contradictions → sends correction prompt
+1. Hard-fail (abort): AI Overview count mismatch vs. extracted data; `serp_intent.primary_intent` or `is_mixed` contradictions; `dominant_pattern` contradictions
+2. Soft-fail (1 retry): `serp_intent.confidence` upgrade (LLM claims higher confidence than computed); `mixed_intent_strategy` contradictions → appended as interpretation notes
 3. Failed validations written to `*.validation.md` for inspection
+
+See `docs/validator_rules_20260501.md` for the full field-by-field rule list with severity, detection location, and test pointers.
 
 `test_validation_consistency.py` (spec v2 Gap 5) is a canary that scans the prompt files for `keyword_profiles.<field>` references and asserts each has a corresponding mention in `validate_llm_report`. Run it after adding new pre-computed fields to catch missed validators early.
 
