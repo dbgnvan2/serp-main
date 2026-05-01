@@ -572,6 +572,39 @@ class TestSerpAudit(unittest.TestCase):
         self.assertIn("The Blame/Reactivity Trap", names_match,
                       '"mean" as a whole word must fire the Blame/Reactivity trigger')
 
+    def test_strategic_patterns_loaded_from_yaml(self):
+        # Verify all 4 built-in patterns are present in the YAML-loaded set
+        patterns = serp_audit._load_strategic_patterns()
+        names = [p["Pattern_Name"] for p in patterns]
+        for expected in ["The Medical Model Trap", "The Fusion Trap",
+                         "The Resource Trap", "The Blame/Reactivity Trap"]:
+            self.assertIn(expected, names)
+
+    def test_custom_pattern_in_yaml_fires(self):
+        import tempfile, textwrap
+        yaml_content = textwrap.dedent("""\
+            - Pattern_Name: The Custom Test Trap
+              Triggers:
+                - hopeless
+                - overwhelmed
+              Status_Quo_Message: Nothing will ever change.
+              Bowen_Bridge_Reframe: Change starts with self-definition.
+              Content_Angle: Why hopelessness is a systems problem, not a personal one.
+        """)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write(yaml_content)
+            tmp_path = f.name
+        try:
+            recs = serp_audit.analyze_strategic_opportunities(
+                [{"Phrase": "feeling hopeless about the relationship", "Count": 1}],
+                patterns_path=tmp_path,
+            )
+            names = [r["Pattern_Name"] for r in recs]
+            self.assertIn("The Custom Test Trap", names)
+        finally:
+            import os as _os
+            _os.unlink(tmp_path)
+
     def test_apply_no_cache_toggle(self):
         """no_cache should only be added when enabled."""
         with patch.object(serp_audit, "NO_CACHE_ENABLED", True):

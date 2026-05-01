@@ -49,6 +49,7 @@ underscores). The GUI auto-updates `config.yml` with the latest paths.
   top of file = highest priority. Edit this file to refine intent rules; do
   not push exceptions into Python.
 - `clinical_dictionary.json` — Bowen vs medical-model vocabulary tiers.
+- `strategic_patterns.yml` — Bowen pattern definitions (triggers, reframes, content angles). Add patterns here; no Python required.
 
 ## Reference documentation
 

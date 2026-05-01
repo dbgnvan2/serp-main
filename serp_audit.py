@@ -1161,75 +1161,35 @@ def _dataset_topic_profile(keywords):
     }
 
 
-def analyze_strategic_opportunities(ngram_results, keywords=None):
+_STRATEGIC_PATTERNS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strategic_patterns.yml")
+
+
+def _load_strategic_patterns(path=None):
+    """Load Bowen pattern definitions from strategic_patterns.yml."""
+    fpath = path or _STRATEGIC_PATTERNS_PATH
+    with open(fpath, encoding="utf-8") as f:
+        return yaml.safe_load(f) or []
+
+
+def analyze_strategic_opportunities(ngram_results, keywords=None, patterns_path=None):
     """
     Maps detected N-Gram patterns to Bowen Theory strategic recommendations.
     Returns a list of dictionaries for the 'Strategic_Recommendations' sheet.
+    Patterns are loaded from strategic_patterns.yml; add new patterns there.
     """
-    recommendations = []
-
-    # Define the Knowledge Base (The "Bridge")
-    profile = _dataset_topic_profile(keywords)
-
-    strategies = [
-        {
-            "Pattern_Name": "The Medical Model Trap",
-            "Triggers": ["clinical", "registered", "diagnosis", "disorder", "mental health", "patient", "treatment"],
-            "Status_Quo_Message": "You are sick/broken and need an expert to fix you (External Locus of Control).",
-            "Bowen_Bridge_Reframe": "Shift from pathology to functioning. You don't need a diagnosis; you need a map of your emotional system.",
-            "Content_Angle": "Why turning family estrangement into a diagnosis keeps you stuck."
-        },
-        {
-            "Pattern_Name": "The Fusion Trap",
-            "Triggers": ["connection", "bond", "close", "intimacy", "communication", "reconnect", "reach out"],
-            "Status_Quo_Message": "The goal is to force closeness, agreement, or reconnection as quickly as possible.",
-            "Bowen_Bridge_Reframe": "Sustainable contact requires differentiation. Anxiety-driven pursuit often increases reactivity and deepens cutoff.",
-            "Content_Angle": "Why trying to force reconnection may deepen the cutoff."
-        },
-        {
-            "Pattern_Name": "The Resource Trap",
-            "Triggers": ["free", "low cost", "sliding scale", "cheap", "affordable", "covered", "insurance"],
-            "Status_Quo_Message": "High anxiety about resources/access. Seeking immediate symptom relief (venting).",
-            "Bowen_Bridge_Reframe": "Address the anxiety driving the search. Cheap relief often delays real structural change.",
-            "Content_Angle": "When short-term relief becomes a substitute for working the family pattern."
-        },
-        {
-            "Pattern_Name": "The Blame/Reactivity Trap",
-            "Triggers": ["narcissist", "toxic", "abusive", "mean", "angry", "hate", "deal with"],
-            "Status_Quo_Message": "The problem is the other person (The Identified Patient).",
-            "Bowen_Bridge_Reframe": "Focus on self-regulation. You cannot change them, only your response to them.",
-            "Content_Angle": "Stop diagnosing the other person and start observing your own reactivity."
-        }
-    ]
-
-    if profile["estrangement_family"] and not profile["marriage_couples"]:
-        for strategy in strategies:
-            if strategy["Pattern_Name"] == "The Medical Model Trap":
-                strategy["Content_Angle"] = "Why turning family estrangement into a diagnosis keeps you stuck."
-            elif strategy["Pattern_Name"] == "The Fusion Trap":
-                strategy["Content_Angle"] = "Why trying to force reconnection may deepen the cutoff."
-                strategy["Status_Quo_Message"] = "The goal is to force closeness, agreement, or reconnection as quickly as possible."
-                strategy["Bowen_Bridge_Reframe"] = "Sustainable contact requires differentiation. Anxiety-driven pursuit often increases reactivity and deepens cutoff."
-            elif strategy["Pattern_Name"] == "The Resource Trap":
-                strategy["Content_Angle"] = "When short-term relief becomes a substitute for working the family pattern."
-            elif strategy["Pattern_Name"] == "The Blame/Reactivity Trap":
-                strategy["Content_Angle"] = "Stop diagnosing the other person and start observing your own reactivity."
-
-    # Flatten ngrams for searching
+    strategies = _load_strategic_patterns(patterns_path)
     all_phrases = " ".join([item["Phrase"] for item in ngram_results]).lower()
 
+    recommendations = []
     for strategy in strategies:
         found_triggers = [t for t in strategy["Triggers"]
                          if re.search(r'\b' + re.escape(t) + r'\b', all_phrases)]
         if found_triggers:
-            # Create a copy to avoid mutating the template if we were reusing it
             rec = strategy.copy()
-            rec["Detected_Triggers"] = ", ".join(
-                found_triggers[:5])  # Limit to top 5 matches
+            rec["Detected_Triggers"] = ", ".join(found_triggers[:5])
             recommendations.append(rec)
 
     if not recommendations:
-        # Default fallback if no specific triggers found
         recommendations.append({
             "Pattern_Name": "General Differentiation",
             "Detected_Triggers": "N/A",
