@@ -17,9 +17,9 @@ serpapi:
   related_questions_ai_max_calls: 5
 files:
   input_csv: keywords_couples_therapy.csv
-  output_xlsx: output/market_analysis_couples_therapy_20260430_1948.xlsx
-  output_json: output/market_analysis_couples_therapy_20260430_1948.json
-  output_md: output/market_analysis_couples_therapy_20260430_1948.md
+  output_xlsx: output/market_analysis_couples_therapy_20260501_0717.xlsx
+  output_json: output/market_analysis_couples_therapy_20260501_0717.json
+  output_md: output/market_analysis_couples_therapy_20260501_0717.md
   domain_overrides: domain_overrides.yml
 enrichment:
   enabled: true

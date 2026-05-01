@@ -1,27 +1,41 @@
 """SERP intent verdict computation.
 
-Given the organic results for a keyword (each tagged with content_type and
-entity_type by classifiers.py) plus local-pack presence and the client/known-
-competitor identity of each URL, compute a deterministic intent verdict using
-the rule table in intent_mapping.yml.
+Given the TOP-10 organic results for a keyword (each tagged with content_type
+and entity_type by classifiers.py) plus local-pack presence and the
+client/known-competitor identity of each URL, compute a deterministic intent
+verdict using the rule table in intent_mapping.yml.
 
 Output (stored at keyword_profiles[kw]["serp_intent"]):
     {
-        "primary_intent": str,        # informational | commercial_investigation |
-                                      # transactional | navigational | local |
-                                      # "mixed" (when is_mixed=True) |
-                                      # "uncategorised" (when classified_total=0)
-        "intent_distribution": dict,  # share per intent among CLASSIFIED URLs
-        "is_mixed": bool,             # True when no intent passes thresholds
-        "mixed_components": list,     # intents with ≥2 URLs when is_mixed=True
-        "confidence": str,            # high | medium | low
+        "primary_intent": str | None,  # informational | commercial_investigation |
+                                       # transactional | navigational | local |
+                                       # "mixed" (when is_mixed=True) |
+                                       # None (when classified_organic_url_count < 5)
+        "intent_distribution": dict,   # INTEGER count per intent among classified
+                                       # organic URLs (not fractions)
+        "is_mixed": bool,              # True when no intent passes thresholds
+        "mixed_components": list,      # intents with ≥2 URLs when is_mixed=True
+        "confidence": str,             # high | medium | low
         "evidence": {
-            "total_url_count": int,
-            "classified_url_count": int,
-            "uncategorised_count": int,
-            "intent_counts": dict,    # raw counts including uncategorised
+            "organic_url_count": int,
+            "classified_organic_url_count": int,
+            "uncategorised_organic_url_count": int,
+            "local_pack_present": bool,
+            "local_pack_member_count": int,
         },
     }
+
+Confidence rules (count-based, not ratio-based):
+  - high   if classified_organic_url_count >= 8 AND organic_url_count >= 8
+  - medium if classified_organic_url_count >= 5 AND organic_url_count >= 5
+  - low    otherwise
+
+When classified_organic_url_count < 5, primary_intent is None (insufficient
+data). intent_distribution, is_mixed, and mixed_components are still populated
+from what was classified.
+
+The caller MUST cap organic_rows to the top 10 before calling compute_serp_intent.
+This module does not enforce the cap — it trusts its input.
 
 Domain judgment lives in intent_mapping.yml. Edit the YAML, not this file.
 """
@@ -47,17 +61,12 @@ DEFAULT_MAPPING_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "intent_mapping.yml"
 )
 
-# Fallback thresholds if config doesn't supply them. Spec defaults:
-#   - primary share ≥ 0.60  → that intent is primary
-#   - else, top share ≥ 0.40 AND second share ≤ 0.20 → that intent is primary
-#   - else → mixed (primary = highest count, is_mixed = True)
-#   - confidence: classified ratio ≥ 0.80 = high, ≥ 0.50 = medium, else low
+# Share thresholds for determining primary vs mixed intent.
+# These are independent of the confidence thresholds (which are count-based).
 DEFAULT_THRESHOLDS = {
     "primary_share": 0.60,
     "fallback_share": 0.40,
     "fallback_runner_up_max": 0.20,
-    "confidence_high": 0.80,
-    "confidence_medium": 0.50,
 }
 
 
@@ -121,36 +130,43 @@ def _classify_url(url_attrs: dict, rules: list) -> str:
     for rule in rules:
         if _matches_rule(rule["match"], url_attrs):
             return rule["intent"]
-    # Final safety net: if no rule (including catch-all) matched, treat as
-    # uncategorised. The well-formed YAML always has a catch-all so this is
-    # belt-and-suspenders.
+    # Belt-and-suspenders: well-formed YAML always has a catch-all rule.
     return "uncategorised"
 
 
-def _bucket_confidence(classified_share: float, thresholds: dict) -> str:
-    if classified_share >= thresholds["confidence_high"]:
+def _bucket_confidence(classified_count: int, organic_count: int) -> str:
+    """Count-based confidence (not ratio-based).
+
+    high   if classified >= 8 AND organic >= 8
+    medium if classified >= 5 AND organic >= 5
+    low    otherwise
+    """
+    if classified_count >= 8 and organic_count >= 8:
         return "high"
-    if classified_share >= thresholds["confidence_medium"]:
+    if classified_count >= 5 and organic_count >= 5:
         return "medium"
     return "low"
 
 
 def _determine_primary(
     intent_counts: dict, classified_total: int, thresholds: dict
-) -> tuple[str, bool]:
-    """Apply primary/mixed thresholds. Returns (primary_intent, is_mixed)."""
-    if classified_total == 0:
-        return ("uncategorised", False)
+) -> tuple[str | None, bool]:
+    """Apply primary/mixed thresholds. Returns (primary_intent, is_mixed).
 
-    # Sort intents by count descending (excluding uncategorised; it never
-    # competes for primary).
+    Returns (None, False) when classified_total < 5 (insufficient data).
+    Returns ("mixed", True) when no single intent clears the thresholds.
+    """
+    if classified_total == 0:
+        return (None, False)
+
+    # Sort intents by count descending (uncategorised never competes for primary).
     competing = sorted(
         ((k, v) for k, v in intent_counts.items() if k != "uncategorised"),
         key=lambda kv: kv[1],
         reverse=True,
     )
     if not competing or competing[0][1] == 0:
-        return ("uncategorised", False)
+        return (None, False)
 
     top_intent, top_count = competing[0]
     top_share = top_count / classified_total
@@ -171,21 +187,23 @@ def compute_serp_intent(
     has_local_pack: bool,
     client_domain: str = "",
     known_brand_domains: Iterable[str] = (),
+    local_pack_member_count: int = 0,
     mapping: dict | None = None,
     thresholds: dict | None = None,
 ) -> dict:
     """Compute the serp_intent block for one keyword.
 
     Args:
-        organic_rows: list of {"rank", "title", "source", "entity_type",
-            "content_type", ...}. Either 'source' or 'link' must identify the
-            URL/domain for client/competitor matching; we accept both keys.
-        has_local_pack: True if SerpAPI returned a `local_results` block.
+        organic_rows: TOP-10 organic results (caller must cap). Each row is a
+            dict with "rank", "title", "source" or "link", "entity_type",
+            "content_type". The len() of this list becomes organic_url_count.
+        has_local_pack: True if SerpAPI returned a local_results block.
         client_domain: client's primary domain (e.g., "livingsystems.ca").
         known_brand_domains: iterable of competitor domains/brand strings.
-        mapping: pre-loaded mapping dict (from load_mapping()). If None, load
+        local_pack_member_count: number of entries in the local pack (0 if none).
+        mapping: pre-loaded mapping dict (from load_mapping()). If None, loads
             from DEFAULT_MAPPING_PATH.
-        thresholds: thresholds dict. If None, DEFAULT_THRESHOLDS used.
+        thresholds: primary/mixed share thresholds. If None, DEFAULT_THRESHOLDS used.
     """
     if mapping is None:
         mapping = load_mapping()
@@ -194,10 +212,10 @@ def compute_serp_intent(
     local_pack_value = "yes" if has_local_pack else "no"
 
     intent_counts = {intent: 0 for intent in VALID_INTENTS}
-    total = 0
+    organic_count = 0
 
     for row in organic_rows or []:
-        total += 1
+        organic_count += 1
         link_or_source = row.get("link") or row.get("source") or ""
         url_attrs = {
             "content_type": row.get("content_type") or "unknown",
@@ -215,23 +233,22 @@ def compute_serp_intent(
     )
     uncategorised_count = intent_counts["uncategorised"]
 
-    # Distribution among classified URLs only (uncategorised excluded).
-    distribution = {}
-    if classified_total > 0:
-        for intent in VALID_INTENTS:
-            if intent == "uncategorised":
-                continue
-            distribution[intent] = intent_counts[intent] / classified_total
-    else:
-        for intent in VALID_INTENTS:
-            if intent == "uncategorised":
-                continue
-            distribution[intent] = 0.0
+    # intent_distribution: INTEGER counts per intent bucket (not fractions).
+    # uncategorised is excluded — it is not a "classified" intent.
+    distribution = {
+        intent: intent_counts[intent]
+        for intent in VALID_INTENTS
+        if intent != "uncategorised"
+    }
 
-    primary_intent, is_mixed = _determine_primary(intent_counts, classified_total, th)
+    # primary_intent is None when classified_total < 5 (insufficient data).
+    if classified_total < 5:
+        primary_intent = None
+        is_mixed = False
+    else:
+        primary_intent, is_mixed = _determine_primary(intent_counts, classified_total, th)
 
     # mixed_components: intents with ≥2 URLs when no single intent wins.
-    # Present only when is_mixed=True; empty list otherwise.
     if is_mixed:
         mixed_components = sorted(
             intent for intent in VALID_INTENTS
@@ -240,8 +257,7 @@ def compute_serp_intent(
     else:
         mixed_components = []
 
-    classified_share = (classified_total / total) if total else 0.0
-    confidence = _bucket_confidence(classified_share, th)
+    confidence = _bucket_confidence(classified_total, organic_count)
 
     return {
         "primary_intent": primary_intent,
@@ -250,9 +266,10 @@ def compute_serp_intent(
         "mixed_components": mixed_components,
         "confidence": confidence,
         "evidence": {
-            "total_url_count": total,
-            "classified_url_count": classified_total,
-            "uncategorised_count": uncategorised_count,
-            "intent_counts": dict(intent_counts),
+            "organic_url_count": organic_count,
+            "classified_organic_url_count": classified_total,
+            "uncategorised_organic_url_count": uncategorised_count,
+            "local_pack_present": has_local_pack,
+            "local_pack_member_count": local_pack_member_count,
         },
     }

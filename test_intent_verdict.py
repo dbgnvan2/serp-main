@@ -3,8 +3,11 @@
 Covers:
   - YAML schema validation (load_mapping)
   - Each rule path in intent_mapping.yml fires correctly
-  - Aggregation: distribution, primary_intent, is_mixed, confidence
-  - Edge cases: empty SERP, all uncategorised, exactly-on-threshold, ties
+  - Aggregation: distribution (integers), primary_intent, is_mixed, confidence
+  - Fix 1: denominator is top-10 organic only; local pack / other modules excluded
+  - Fix 2: intent_distribution values are integers; evidence.intent_counts removed
+  - Edge cases: empty SERP, all uncategorised, null primary_intent (n<5),
+    exactly-at-threshold, ties
 """
 
 from __future__ import annotations
@@ -107,7 +110,6 @@ class TestLoadMapping:
 
     def test_real_yaml_yes_no_are_strings(self, real_mapping):
         # Regression: PyYAML would otherwise convert unquoted yes/no to booleans
-        # and break string comparison in the matcher.
         for rule in real_mapping["rules"]:
             lp = rule["match"]["local_pack"]
             assert lp in ("yes", "no", "any"), f"local_pack={lp!r} got bool-converted"
@@ -169,7 +171,6 @@ class TestDomainRole:
         ) == "other"
 
     def test_client_takes_precedence_over_known(self):
-        # If client domain accidentally appears in known_brands, client wins.
         assert _domain_role_for_url(
             "https://livingsystems.ca/x",
             "livingsystems.ca",
@@ -219,7 +220,6 @@ class TestMatchesRule:
 
 class TestClassifyUrl:
     def test_client_overrides_content(self, minimal_mapping):
-        # Client URL with content_type=guide → client rule fires first → navigational
         intent = _classify_url(
             {"content_type": "guide", "entity_type": "counselling",
              "local_pack": "yes", "domain_role": "client"},
@@ -256,11 +256,7 @@ class TestClassifyUrl:
 
 
 class TestRealMappingEdgeCases:
-    """Exercises the actual rules in intent_mapping.yml for the cases the
-    rationale block calls out explicitly."""
-
     def test_service_on_directory_is_commercial_investigation(self, real_mapping):
-        # Edge case 1: Psychology Today therapist profile
         intent = _classify_url(
             {"content_type": "service", "entity_type": "directory",
              "local_pack": "yes", "domain_role": "other"},
@@ -269,7 +265,6 @@ class TestRealMappingEdgeCases:
         assert intent == "commercial_investigation"
 
     def test_guide_on_counselling_with_local_pack_is_informational(self, real_mapping):
-        # Edge case 2: provider-hosted guide + local pack on SERP
         intent = _classify_url(
             {"content_type": "guide", "entity_type": "counselling",
              "local_pack": "yes", "domain_role": "other"},
@@ -278,7 +273,6 @@ class TestRealMappingEdgeCases:
         assert intent == "informational"
 
     def test_nonprofit_service_is_transactional(self, real_mapping):
-        # Edge case 4: free vs paid is irrelevant
         intent = _classify_url(
             {"content_type": "service", "entity_type": "nonprofit",
              "local_pack": "no", "domain_role": "other"},
@@ -287,7 +281,6 @@ class TestRealMappingEdgeCases:
         assert intent == "transactional"
 
     def test_other_content_is_uncategorised(self, real_mapping):
-        # Edge case 5: Reddit/YouTube classified as 'other'
         intent = _classify_url(
             {"content_type": "other", "entity_type": "media",
              "local_pack": "no", "domain_role": "other"},
@@ -304,7 +297,6 @@ class TestRealMappingEdgeCases:
         assert intent == "uncategorised"
 
     def test_client_url_always_navigational(self, real_mapping):
-        # Edge case from clarification 3: client URL on informational keyword
         intent = _classify_url(
             {"content_type": "guide", "entity_type": "counselling",
              "local_pack": "no", "domain_role": "client"},
@@ -369,11 +361,18 @@ class TestComputeSerpIntent:
         result = compute_serp_intent(
             organic_rows=[], has_local_pack=False, mapping=real_mapping
         )
-        assert result["primary_intent"] == "uncategorised"
+        # No rows → classified < 5 → primary_intent is None
+        assert result["primary_intent"] is None
         assert result["is_mixed"] is False
         assert result["confidence"] == "low"
-        assert result["evidence"]["total_url_count"] == 0
-        assert result["evidence"]["classified_url_count"] == 0
+        ev = result["evidence"]
+        assert ev["organic_url_count"] == 0
+        assert ev["classified_organic_url_count"] == 0
+        assert ev["uncategorised_organic_url_count"] == 0
+        assert ev["local_pack_present"] is False
+        assert ev["local_pack_member_count"] == 0
+        # intent_counts must NOT appear (Fix 2)
+        assert "intent_counts" not in ev
 
     def test_all_uncategorised(self, real_mapping):
         rows = [
@@ -383,11 +382,13 @@ class TestComputeSerpIntent:
         result = compute_serp_intent(
             organic_rows=rows, has_local_pack=False, mapping=real_mapping
         )
-        assert result["primary_intent"] == "uncategorised"
+        # 0 classified → primary_intent is None
+        assert result["primary_intent"] is None
         assert result["confidence"] == "low"
-        assert result["evidence"]["uncategorised_count"] == 2
+        assert result["evidence"]["uncategorised_organic_url_count"] == 2
 
     def test_pure_informational_high_confidence(self, real_mapping):
+        # 10 guides → classified=10, organic=10 → high confidence
         rows = [
             _row(i, f"https://e{i}.com/g", "guide", "media")
             for i in range(1, 11)
@@ -398,7 +399,9 @@ class TestComputeSerpIntent:
         assert result["primary_intent"] == "informational"
         assert result["is_mixed"] is False
         assert result["confidence"] == "high"
-        assert result["intent_distribution"]["informational"] == 1.0
+        # Fix 2: intent_distribution is integers, not fractions
+        assert result["intent_distribution"]["informational"] == 10
+        assert isinstance(result["intent_distribution"]["informational"], int)
 
     def test_pure_local(self, real_mapping):
         rows = [
@@ -410,9 +413,9 @@ class TestComputeSerpIntent:
         )
         assert result["primary_intent"] == "local"
         assert result["is_mixed"] is False
+        assert result["evidence"]["local_pack_present"] is True
 
     def test_mixed_intent_5_5(self, real_mapping):
-        # 5 informational guides + 5 transactional services, no local pack
         rows = [
             _row(i, f"https://g{i}.com/", "guide", "media")
             for i in range(1, 6)
@@ -423,53 +426,116 @@ class TestComputeSerpIntent:
         result = compute_serp_intent(
             organic_rows=rows, has_local_pack=False, mapping=real_mapping
         )
-        # 50/50: top share = 0.5, second share = 0.5 → fails primary (≥0.6)
-        # and fallback (≥0.4 with second ≤0.2) → mixed
         assert result["is_mixed"] is True
         assert result["primary_intent"] == "mixed"
         assert set(result["mixed_components"]) == {"informational", "transactional"}
+        # intent_distribution: integers
+        assert result["intent_distribution"]["informational"] == 5
+        assert result["intent_distribution"]["transactional"] == 5
+
+    def test_null_primary_when_fewer_than_5_classified(self, real_mapping):
+        # 4 classified + 6 uncategorised → primary_intent must be None
+        rows = [
+            _row(i, f"https://g{i}.com/", "guide", "media") for i in range(1, 5)
+        ] + [
+            _row(i, f"https://x{i}.com/", "other", "media") for i in range(5, 11)
+        ]
+        result = compute_serp_intent(
+            organic_rows=rows, has_local_pack=False, mapping=real_mapping
+        )
+        # n=4 < 5 → null primary, even though informational dominates
+        assert result["primary_intent"] is None
+        assert result["is_mixed"] is False
+        assert result["confidence"] == "low"
+        # distribution still populated from what was classified
+        assert result["intent_distribution"]["informational"] == 4
+
+    def test_confidence_medium_exactly_5_classified(self, real_mapping):
+        # 5 classified + 5 uncategorised; organic=10, classified=5 → medium
+        rows = [
+            _row(i, f"https://g{i}.com/", "guide", "media") for i in range(1, 6)
+        ] + [
+            _row(i, f"https://x{i}.com/", "other", "media") for i in range(6, 11)
+        ]
+        result = compute_serp_intent(
+            organic_rows=rows, has_local_pack=False, mapping=real_mapping
+        )
+        assert result["confidence"] == "medium"
+        assert result["primary_intent"] == "informational"
+
+    def test_confidence_high_exactly_8_classified(self, real_mapping):
+        # 8 guides + 2 uncategorised; organic=10, classified=8 → high
+        rows = [
+            _row(i, f"https://g{i}.com/", "guide", "media") for i in range(1, 9)
+        ] + [
+            _row(i, f"https://x{i}.com/", "other", "media") for i in range(9, 11)
+        ]
+        result = compute_serp_intent(
+            organic_rows=rows, has_local_pack=False, mapping=real_mapping
+        )
+        assert result["confidence"] == "high"
+
+    def test_denominator_is_organic_rows_only(self, real_mapping):
+        # Fix 1: 10 organic + simulated non-organic rows should not affect denominator.
+        # Caller must cap to top-10 before calling; here we verify that passing
+        # exactly 10 organic rows produces organic_url_count=10.
+        organic_10 = [
+            _row(i, f"https://g{i}.com/", "guide", "media") for i in range(1, 11)
+        ]
+        # Also simulate 5 local pack entries and 8 forum rows as SEPARATE inputs
+        # (the caller would never pass them in — this test confirms the function
+        # counts only what it receives).
+        result = compute_serp_intent(
+            organic_rows=organic_10,
+            has_local_pack=True,
+            local_pack_member_count=5,
+            mapping=real_mapping,
+        )
+        assert result["evidence"]["organic_url_count"] == 10
+        assert result["evidence"]["local_pack_member_count"] == 5
+        assert result["evidence"]["local_pack_present"] is True
 
     def test_fallback_threshold_40_with_low_runner_up(self, real_mapping):
-        # 4 informational + 1 transactional + 5 uncategorised → among classified
-        # (5 total): info 0.8, transactional 0.2 — primary should be informational.
+        # 4 informational + 1 transactional + 5 uncategorised → classified=5
+        # info share = 4/5 = 0.8 → primary should be informational (not mixed)
         rows = [
-            _row(i, f"https://g{i}.com/", "guide", "media")
-            for i in range(1, 5)  # 4 guides
+            _row(i, f"https://g{i}.com/", "guide", "media") for i in range(1, 5)
         ] + [
-            _row(5, "https://s.ca/", "service", "counselling"),  # 1 service
+            _row(5, "https://s.ca/", "service", "counselling"),
         ] + [
-            _row(i, f"https://other{i}.com/", "other", "media")
-            for i in range(6, 11)  # 5 uncategorised
+            _row(i, f"https://other{i}.com/", "other", "media") for i in range(6, 11)
         ]
         result = compute_serp_intent(
             organic_rows=rows, has_local_pack=False, mapping=real_mapping
         )
         assert result["primary_intent"] == "informational"
         assert result["is_mixed"] is False
-        # 5 classified out of 10 total → confidence_share = 0.5 → medium
         assert result["confidence"] == "medium"
 
     def test_confidence_low_when_few_classified(self, real_mapping):
-        # 2 classified out of 10 → 0.2 share → low
+        # 2 classified out of 10 → low (n=2 < 5)
         rows = [
             _row(1, "https://g.com/", "guide", "media"),
             _row(2, "https://s.ca/", "service", "counselling"),
         ] + [
-            _row(i, f"https://x{i}.com/", "other", "media")
-            for i in range(3, 11)
+            _row(i, f"https://x{i}.com/", "other", "media") for i in range(3, 11)
         ]
         result = compute_serp_intent(
             organic_rows=rows, has_local_pack=False, mapping=real_mapping
         )
         assert result["confidence"] == "low"
+        # n=2 < 5 → primary_intent is None
+        assert result["primary_intent"] is None
 
-    def test_client_urls_dilute_but_dont_dominate(self, real_mapping):
-        # 1 client URL + 9 informational guides → primary still informational
+    def test_client_urls_informational_primary(self, real_mapping):
+        # 1 client URL + 9 informational guides → primary informational
+        # client URL → navigational (1 count), guides → informational (9 counts)
+        # classified = 10, organic = 10 → high confidence
+        # 9/10 informational = 0.9 share → primary = informational
         rows = [
             _row(1, "https://livingsystems.ca/about", "service", "counselling"),
         ] + [
-            _row(i, f"https://g{i}.com/", "guide", "media")
-            for i in range(2, 11)
+            _row(i, f"https://g{i}.com/", "guide", "media") for i in range(2, 11)
         ]
         result = compute_serp_intent(
             organic_rows=rows,
@@ -478,11 +544,10 @@ class TestComputeSerpIntent:
             mapping=real_mapping,
         )
         assert result["primary_intent"] == "informational"
-        # 9/10 informational = 0.9 share, classified=10/10 → high confidence
         assert result["confidence"] == "high"
+        assert result["intent_distribution"]["informational"] == 9
 
     def test_branded_serp_dominated_by_client(self, real_mapping):
-        # 7 client URLs + 3 directory results → primary navigational
         rows = [
             _row(i, f"https://livingsystems.ca/p{i}", "guide", "counselling")
             for i in range(1, 8)
@@ -499,24 +564,8 @@ class TestComputeSerpIntent:
         assert result["primary_intent"] == "navigational"
         assert result["is_mixed"] is False
 
-    def test_known_competitor_tagged_navigational(self, real_mapping):
-        rows = [
-            _row(1, "https://rival.ca/services", "service", "counselling"),
-            _row(2, "https://elsewhere.ca/", "service", "counselling"),
-        ]
-        result = compute_serp_intent(
-            organic_rows=rows,
-            has_local_pack=False,
-            client_domain="livingsystems.ca",
-            known_brand_domains=["rival.ca"],
-            mapping=real_mapping,
-        )
-        # rival.ca → navigational; elsewhere.ca → transactional (no local pack)
-        counts = result["evidence"]["intent_counts"]
-        assert counts["navigational"] == 1
-        assert counts["transactional"] == 1
-
-    def test_evidence_counts_sum_to_total(self, real_mapping):
+    def test_evidence_new_field_names(self, real_mapping):
+        # Fix 1: verify new field names are present; old names are absent
         rows = [
             _row(1, "https://a.com/", "guide", "media"),
             _row(2, "https://b.com/", "service", "counselling"),
@@ -526,21 +575,60 @@ class TestComputeSerpIntent:
             organic_rows=rows, has_local_pack=False, mapping=real_mapping
         )
         ev = result["evidence"]
-        assert ev["total_url_count"] == 3
-        assert ev["classified_url_count"] + ev["uncategorised_count"] == 3
-        assert sum(ev["intent_counts"].values()) == 3
+        # New names present
+        assert "organic_url_count" in ev
+        assert "classified_organic_url_count" in ev
+        assert "uncategorised_organic_url_count" in ev
+        assert "local_pack_present" in ev
+        assert "local_pack_member_count" in ev
+        # Old names absent
+        assert "total_url_count" not in ev
+        assert "classified_url_count" not in ev
+        assert "uncategorised_count" not in ev
+        # Fix 2: intent_counts removed
+        assert "intent_counts" not in ev
 
-    def test_distribution_excludes_uncategorised(self, real_mapping):
+    def test_evidence_counts_sum_to_organic_url_count(self, real_mapping):
         rows = [
             _row(1, "https://a.com/", "guide", "media"),
-            _row(2, "https://b.com/", "other", "media"),
+            _row(2, "https://b.com/", "service", "counselling"),
+            _row(3, "https://c.com/", "other", "media"),
         ]
         result = compute_serp_intent(
             organic_rows=rows, has_local_pack=False, mapping=real_mapping
         )
-        assert "uncategorised" not in result["intent_distribution"]
-        # 1 informational of 1 classified URL → 1.0
-        assert result["intent_distribution"]["informational"] == 1.0
+        ev = result["evidence"]
+        assert ev["organic_url_count"] == 3
+        assert (ev["classified_organic_url_count"] + ev["uncategorised_organic_url_count"]
+                == ev["organic_url_count"])
+
+    def test_distribution_excludes_uncategorised_and_is_integer(self, real_mapping):
+        rows = [
+            _row(1, "https://a.com/", "guide", "media"),
+            _row(2, "https://b.com/", "other", "media"),
+            _row(3, "https://c.com/", "other", "media"),
+            _row(4, "https://d.com/", "other", "media"),
+            _row(5, "https://e.com/", "other", "media"),
+        ]
+        result = compute_serp_intent(
+            organic_rows=rows, has_local_pack=False, mapping=real_mapping
+        )
+        dist = result["intent_distribution"]
+        # uncategorised must not appear in distribution
+        assert "uncategorised" not in dist
+        # Values are integers (Fix 2)
+        assert dist["informational"] == 1
+        assert isinstance(dist["informational"], int)
+
+    def test_local_pack_member_count_passed_through(self, real_mapping):
+        result = compute_serp_intent(
+            organic_rows=[],
+            has_local_pack=True,
+            local_pack_member_count=3,
+            mapping=real_mapping,
+        )
+        assert result["evidence"]["local_pack_member_count"] == 3
+        assert result["evidence"]["local_pack_present"] is True
 
 
 # ─── Threshold customisation ─────────────────────────────────────────────────
@@ -548,13 +636,11 @@ class TestComputeSerpIntent:
 
 class TestThresholdOverrides:
     def test_custom_thresholds_change_primary_decision(self, real_mapping):
-        # Same rows, two threshold configs → different mixed verdicts
         rows = [
             _row(i, f"https://g{i}.com/", "guide", "media") for i in range(1, 6)
         ] + [
             _row(i, f"https://s{i}.ca/", "service", "counselling") for i in range(6, 11)
         ]
-        # Stricter: requires ≥0.7 share → 5/10 fails → mixed
         strict = compute_serp_intent(
             rows, has_local_pack=False, mapping=real_mapping,
             thresholds={"primary_share": 0.7, "fallback_share": 0.7,
@@ -563,7 +649,7 @@ class TestThresholdOverrides:
         assert strict["is_mixed"] is True
         assert strict["primary_intent"] == "mixed"
         assert "mixed_components" in strict
-        # Loose: ≥0.5 share counts → 5/10 passes
+
         loose = compute_serp_intent(
             rows, has_local_pack=False, mapping=real_mapping,
             thresholds={"primary_share": 0.5, "fallback_share": 0.5,

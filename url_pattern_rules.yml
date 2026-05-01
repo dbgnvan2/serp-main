@@ -1,0 +1,53 @@
+# url_pattern_rules.yml
+#
+# URL-pattern-based content-type fallback rules applied when the HTML enricher
+# could not classify a URL (content_type is "other", "unknown", or "N/A").
+#
+# Rules are applied in priority order — first match wins.
+# Pattern: Python regex matched against the full URL (lowercased).
+# entity_types: list of entity_type values for which this rule applies,
+#               or ["any"] to apply regardless of entity type.
+# content_type: the content type to assign on a match.
+#
+# IMPORTANT: these rules ONLY fire when the base HTML classifier could not
+# classify the URL. They do not override classifications from HTML analysis.
+#
+# Diagnostic basis: classifier_audit_couples_therapy.md (2026-05-01).
+# Primary misclassification patterns observed:
+#   - Counselling provider service pages (homepage, /counselling/, /therapy/ paths) → other
+#   - Provider blog/resource pages (/blog/, /articles/) → other
+
+version: 1
+
+url_pattern_rules:
+
+  # ── Service page signals ───────────────────────────────────────────────────
+  # Provider homepage (bare domain root or single trailing slash) on a
+  # service-provider entity. These are almost always service pages.
+  - pattern: '^https?://[^/?#]+/?$'
+    entity_types: [counselling, nonprofit, legal, professional_association]
+    content_type: service
+    rationale: bare domain root on service-provider entity → service page
+
+  # Service-path keywords in the URL
+  - pattern: '/(?:service|services|therapy|counselling|counseling|our-team|about-us|about|treatment|programs?|care)(?:/|$)'
+    entity_types: [counselling, nonprofit, legal, professional_association]
+    content_type: service
+    rationale: URL path signals service offering
+
+  # Relationship/couples-specific paths
+  - pattern: '/(?:couples|marriage|relationship|family|individual|group)-(?:counselling|counseling|therapy|treatment)(?:/|$)'
+    entity_types: [counselling, nonprofit, legal, any]
+    content_type: service
+    rationale: hyphenated service paths common in counselling domain
+
+  # ── Guide / blog signals ───────────────────────────────────────────────────
+  # Blog or article paths on any entity type
+  - pattern: '/(?:blog|articles?|posts?|resources?|insights?|learn|library|news|media|magazine|journal)/'
+    entity_types: [any]
+    content_type: guide
+    rationale: content publishing paths → guide
+
+  # ── Reddit / forum threads → leave as other (uncategorised) ──────────────
+  # No rule needed — they already fall through to "other" which the intent
+  # mapper treats as uncategorised. This is correct per spec edge case 5.

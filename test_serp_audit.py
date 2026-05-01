@@ -727,6 +727,16 @@ class TestKeywordProfilesInAuditJson(unittest.TestCase):
         for field in ("primary_intent", "is_mixed", "confidence",
                       "intent_distribution", "evidence", "mixed_components"):
             self.assertIn(field, si, f"serp_intent missing field: {field}")
+        ev = si["evidence"]
+        # Fix 1: new evidence field names
+        for ev_field in ("organic_url_count", "classified_organic_url_count",
+                         "uncategorised_organic_url_count", "local_pack_present",
+                         "local_pack_member_count"):
+            self.assertIn(ev_field, ev, f"evidence missing field: {ev_field}")
+        # Fix 1+2: old names must not appear
+        for old_field in ("total_url_count", "classified_url_count",
+                          "uncategorised_count", "intent_counts"):
+            self.assertNotIn(old_field, ev, f"evidence has obsolete field: {old_field}")
 
 
 if __name__ == '__main__':

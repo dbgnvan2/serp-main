@@ -42,15 +42,19 @@ PER-KEYWORD PROFILES (primary data source for Section 2):
 - serp_intent: pre-computed SERP intent verdict (deterministic, rule-driven
   from intent_mapping.yml). Contains:
   - primary_intent: one of informational, commercial_investigation,
-    transactional, navigational, local, uncategorised
-  - is_mixed: true when no intent crosses the share/margin thresholds —
-    primary_intent is then the highest-count intent but the SERP is mixed
-  - confidence: high / medium / low, based on what fraction of URLs were
-    classifiable. Low confidence means the underlying classifiers (Content
-    Type, Entity Type) tagged few URLs — state confidence honestly.
-  - intent_distribution: share per intent among classified URLs
-  - evidence: total_url_count, classified_url_count, uncategorised_count,
-    intent_counts. uncategorised URLs are excluded from the distribution.
+    transactional, navigational, local, "mixed", or null. Null means fewer
+    than 5 of the top-10 organic URLs were classifiable — insufficient data
+    to issue a verdict. "mixed" means no single intent cleared the threshold.
+  - is_mixed: true when primary_intent == "mixed"
+  - confidence: high (≥8 classified) / medium (≥5) / low (<5). Low means
+    the classifiers tagged few URLs — state confidence honestly.
+  - intent_distribution: INTEGER count per intent among classified organic
+    URLs. To get proportions: divide each count by
+    evidence.classified_organic_url_count.
+  - evidence: organic_url_count (top-10 organic URLs processed),
+    classified_organic_url_count, uncategorised_organic_url_count,
+    local_pack_present, local_pack_member_count. uncategorised URLs are
+    excluded from intent_distribution.
 - mixed_intent_strategy: pre-computed strategy hint, set ONLY when
   serp_intent.is_mixed = True. One of:
   - "compete_on_dominant": dominant intent matches an intent the client

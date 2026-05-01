@@ -246,14 +246,49 @@ def test_extra_target_field_rejected():
 # Empty organic list
 # ---------------------------------------------------------------------------
 
-def test_empty_organic_produces_valid_handoff():
-    handoff = build_competitor_handoff(
+def test_no_organic_returns_none():
+    """Fix 3: empty/None organic_results → no handoff file (return None)."""
+    assert build_competitor_handoff(
         [],
         run_id="r_empty",
         run_timestamp="2026-04-30T12:00:00Z",
         client_domain="livingsystems.ca",
         client_brand_names=[],
+    ) is None
+    assert build_competitor_handoff(
+        None,
+        run_id="r_none",
+        run_timestamp="2026-04-30T12:00:00Z",
+        client_domain="livingsystems.ca",
+        client_brand_names=[],
+    ) is None
+
+
+def test_all_client_urls_produces_empty_targets():
+    """Fix 3: all organic URLs are client → empty targets list, file IS written."""
+    all_client_organic = [
+        _make_organic("couples therapy", i, f"https://livingsystems.ca/page-{i}")
+        for i in range(1, 6)
+    ]
+    handoff = build_competitor_handoff(
+        all_client_organic,
+        run_id="r_client",
+        run_timestamp="2026-04-30T12:00:00Z",
+        client_domain="livingsystems.ca",
+        client_brand_names=["Living Systems"],
     )
     assert handoff is not None
     assert handoff["targets"] == []
+    assert handoff["exclusions"]["client_urls_excluded"] > 0
     jsonschema.validate(instance=handoff, schema=_HANDOFF_SCHEMA)
+
+
+def test_invalid_handoff_fails_validation():
+    """Fix 3: a handoff with a missing required field fails schema validation."""
+    bad_handoff = {
+        "schema_version": "1.0",
+        # missing source_run_id and other required fields
+        "targets": [],
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=bad_handoff, schema=_HANDOFF_SCHEMA)

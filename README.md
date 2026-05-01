@@ -200,6 +200,31 @@ You can override both in the GUI launcher or with `--llm-model` / `--advisory-mo
 
 ---
 
+## What's new in this version (v2)
+
+This version adds deterministic pre-computed fields to every keyword profile, preventing the LLM from guessing at data the tool already knows:
+
+| Field | Example value | Description |
+|-------|--------------|-------------|
+| `serp_intent.primary_intent` | `"informational"` | Intent verdict for the top-10 organic results. `null` when fewer than 5 URLs could be classified. `"mixed"` when no single intent clears the threshold. |
+| `serp_intent.is_mixed` | `false` | `true` when `primary_intent == "mixed"`. |
+| `serp_intent.confidence` | `"high"` | `high` (≥8 classified), `medium` (≥5), `low` (<5). Count-based, not ratio-based. |
+| `serp_intent.intent_distribution` | `{"informational": 7, "transactional": 1}` | Integer counts per intent bucket among classified organic URLs. |
+| `serp_intent.evidence.organic_url_count` | `10` | Top-10 organic URLs processed. |
+| `serp_intent.mixed_components` | `["informational", "transactional"]` | Populated only when `is_mixed: true`. |
+| `title_patterns.dominant_pattern` | `"how_to"` | Set when one pattern reaches ≥4 of 10 titles. `null` otherwise. Never `"other"`. |
+| `mixed_intent_strategy` | `"backdoor"` | When `is_mixed: true`: `compete_on_dominant`, `backdoor`, or `avoid`. `null` otherwise. |
+
+**Validator changes:** contradicting `primary_intent`, `is_mixed`, or `title_patterns.dominant_pattern` is a HARD failure (no retry). Contradicting `mixed_intent_strategy` is a SOFT failure (one retry).
+
+**Rule files:**
+- `intent_mapping.yml` — maps `(content_type, entity_type, local_pack, domain_role)` → SERP intent. Edit this file to refine intent assignments without touching Python.
+- `url_pattern_rules.yml` — URL-path fallback rules for pages the HTML enricher couldn't classify. Edit to improve classification rates.
+
+See `docs/intent_mapping_rationale.md` for the rationale behind each mapping decision.
+
+---
+
 ## What the LLM receives (pre-computed fields)
 
 To keep the LLM honest and reduce hallucination, the tool pre-computes deterministic verdicts before sending anything to the model:
@@ -212,7 +237,7 @@ The validator hard-fails if the LLM report contradicts `serp_intent.primary_inte
 
 ---
 
-## Competitor handoff (serp-compete integration)
+## Competitor handoff (Tool 1 → Tool 2)
 
 After every pipeline run, the tool writes:
 
@@ -221,6 +246,14 @@ output/competitor_handoff_<topic>_<timestamp>.json
 ```
 
 This is the input file for **serp-compete** (Tool 2), which audits the top competitor pages in depth. The file is validated against `handoff_schema.json` (draft-07) before being written — if validation fails, no file is written and the error is logged. The `audit_targets` block in `config.yml` controls how many URLs are included and which domains to exclude.
+
+See `docs/handoff_contract.md` for the full field-by-field schema contract between Tool 1 and Tool 2.
+
+---
+
+## Backwards compatibility
+
+Runs produced before the v2 upgrade (pre-2026-05-01) do not contain the `serp_intent`, `title_patterns`, or `mixed_intent_strategy` fields. All three fields are nullable on read — the content brief generator skips validation for any keyword profile where they are absent. Re-running `generate_content_brief.py` against a pre-v2 JSON is safe; the new report sections will simply be empty.
 
 ---
 
@@ -250,7 +283,7 @@ python3 refresh_analysis_outputs.py \
 ```bash
 source venv/bin/activate
 python3 -m pytest test_*.py -q
-# Expected: 330 passed, 5 skipped (tkinter tests skipped in headless environments)
+# Expected: 340 passed, 5 skipped (tkinter tests skipped in headless environments)
 ```
 
 All tests run without API keys — external calls are mocked.

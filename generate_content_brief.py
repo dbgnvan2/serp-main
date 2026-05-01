@@ -28,6 +28,7 @@ except ImportError:
 
 from intent_verdict import compute_serp_intent, load_mapping as load_intent_mapping
 from title_patterns import compute_title_patterns
+from classifiers import classify_url_from_patterns
 
 
 DEFAULT_CLIENT_CONTEXT = {
@@ -695,12 +696,19 @@ def extract_analysis_data_from_json(
             content_breakdown_by_kw[source_kw][content_type] += 1
 
         if label == "A":
+            # Fix 5b: apply URL pattern fallback for rows with no content
+            # classification (N/A or unknown from SerpAPI raw data).
+            effective_ct = content_type
+            if effective_ct in ("N/A", "unknown", "other"):
+                pattern_ct = classify_url_from_patterns(link, entity)
+                if pattern_ct:
+                    effective_ct = pattern_ct
             row_profile = {
                 "rank": rank,
                 "title": title,
                 "source": src,
                 "entity_type": entity,
-                "content_type": content_type,
+                "content_type": effective_ct,
             }
             organic_rows_by_kw[source_kw].append(row_profile)
             if src:
@@ -1025,17 +1033,17 @@ def extract_analysis_data_from_json(
         ]
         dominant_type, entity_label = _classify_entity_distribution(entity_by_kw.get(kw, {}))
 
-        # SERP intent verdict (deterministic, rule-driven via intent_mapping.yml).
-        # Note: row_profile carries 'source' (domain) but not the full link;
-        # compute_serp_intent's domain-role helper does substring matching on
-        # whichever is present, so client_domain="livingsystems.ca" still
-        # matches a 'source' of "livingsystems.ca".
+        # SERP intent verdict — top-10 organic only (spec Fix 1 denominator rule).
+        # row_profile carries 'source' (domain) not the full link; substring
+        # matching on 'source' still works for client/competitor detection.
         kw_has_local_pack = kw in serp_has_local
+        kw_local_pack_count = local_pack_summary.get(kw, {}).get("total_businesses", 0)
         serp_intent = compute_serp_intent(
-            organic_rows=kw_rows,
+            organic_rows=kw_rows[:10],
             has_local_pack=kw_has_local_pack,
             client_domain=client_domain_lower,
             known_brand_domains=known_brands,
+            local_pack_member_count=kw_local_pack_count,
             mapping=intent_mapping,
             thresholds=serp_intent_thresholds,
         )
@@ -1387,6 +1395,8 @@ def has_hard_validation_failures(validation_issues):
             return True
         if "but keyword_profiles shows" in normalized:
             return True
+        if "contradicts keyword_profiles.title_patterns" in normalized:
+            return True
         if "but verified data shows" in normalized:
             return True
         if any(pattern in normalized for pattern in hard_patterns):
@@ -1401,14 +1411,12 @@ def partition_validation_issues(validation_issues):
         normalized = _normalize_text(issue)
         if "contradicts keyword_profiles.entity_label" in normalized:
             notes.append(issue)
-        elif "contradicts keyword_profiles.title_patterns" in normalized:
-            # Spec v2 Gap 2 soft-fail: dominant_pattern mismatch is a
-            # 1-retry note, not a hard abort.
-            notes.append(issue)
         elif "contradicts keyword_profiles.mixed_intent_strategy" in normalized:
-            # Spec v2 Gap 4 soft-fail: mixed_intent_strategy mismatch is a
-            # 1-retry note, not a hard abort.
             notes.append(issue)
+        elif "keyword_profiles.serp_intent.confidence" in normalized:
+            notes.append(issue)
+        # title_patterns.dominant_pattern contradiction is a HARD-FAIL (Fix 7).
+        # Falls through to blocking.append below.
         else:
             blocking.append(issue)
     return blocking, notes
@@ -1832,6 +1840,34 @@ def validate_llm_report(report_text, extracted_data):
                         )
                         break
 
+        # ── confidence upgrade contradiction (SOFT-FAIL) ─────────────────────
+        # LLM may downplay confidence but not upgrade it.
+        HIGH_CONFIDENCE_PHRASES = [
+            r"confidence[:\s]+high",
+            r"high[- ]confidence",
+            r"highly confident",
+        ]
+        MEDIUM_CONFIDENCE_PHRASES = [
+            r"confidence[:\s]+medium",
+            r"medium[- ]confidence",
+        ]
+        if confidence == "low":
+            for phrase in HIGH_CONFIDENCE_PHRASES + MEDIUM_CONFIDENCE_PHRASES:
+                if re.search(phrase, section_l):
+                    issues.append(
+                        f"Report upgrades confidence for '{keyword}' above computed level, "
+                        f"but keyword_profiles.serp_intent.confidence='{confidence}'."
+                    )
+                    break
+        elif confidence == "medium":
+            for phrase in HIGH_CONFIDENCE_PHRASES:
+                if re.search(phrase, section_l):
+                    issues.append(
+                        f"Report upgrades confidence for '{keyword}' to 'high', "
+                        f"but keyword_profiles.serp_intent.confidence='{confidence}'."
+                    )
+                    break
+
     return issues
 
 
@@ -2031,6 +2067,13 @@ def generate_local_report(extracted_data, context, warnings):
     else:
         lines.append("No strong cross-keyword PAA overlap was detected in this run.")
 
+    # Spec Fix 4: deterministic Per-Keyword SERP Intent section
+    kw_profiles = extracted_data.get("keyword_profiles", {})
+    serp_intent_section = generate_serp_intent_section(kw_profiles)
+    if serp_intent_section:
+        lines.append("")
+        lines.append(serp_intent_section)
+
     lines.append("")
     lines.append("## Section 6: Evaluation of Tool-Generated Recommendations")
     tool_recs = extracted_data.get("tool_recommendations_verified", [])
@@ -2072,6 +2115,100 @@ def generate_local_report(extracted_data, context, warnings):
             f"({rel_text or 'none'}). These terms should be queued for the next run when they sharpen intent "
             "segmentation (legal vs therapeutic vs cost-access)."
         )
+
+    return "\n".join(lines).strip()
+
+
+def generate_serp_intent_section(keyword_profiles: dict) -> str:
+    """Build a deterministic 'Per-Keyword SERP Intent' section from keyword_profiles.
+
+    Spec Fix 4: injected into every report so intent data is always visible
+    without opening the JSON. Returns an empty string if there are no profiles.
+    """
+    if not keyword_profiles:
+        return ""
+
+    lines = ["## Per-Keyword SERP Intent", ""]
+    mixed_notes = []  # collect mixed-intent notes for Section 4 callouts
+
+    for kw, profile in keyword_profiles.items():
+        si = profile.get("serp_intent") or {}
+        tp = profile.get("title_patterns") or {}
+        mis = profile.get("mixed_intent_strategy")
+        primary = si.get("primary_intent")
+        confidence = si.get("confidence", "low")
+        is_mixed = si.get("is_mixed", False)
+        dist = si.get("intent_distribution") or {}
+        ev = si.get("evidence") or {}
+        classified_n = ev.get("classified_organic_url_count", 0)
+        organic_n = ev.get("organic_url_count", 0)
+        mixed_comps = si.get("mixed_components") or []
+        dominant_pattern = tp.get("dominant_pattern")
+
+        lines.append(f"### {kw}")
+        lines.append("")
+
+        if primary is None:
+            lines.append(
+                f"- **Primary intent:** insufficient data "
+                f"(only {classified_n} of {organic_n} URLs classified)"
+            )
+        else:
+            lines.append(f"- **Primary intent:** {primary}  *(confidence: {confidence})*")
+
+        # Distribution line — only include buckets with count > 0
+        dist_parts = [
+            f"{intent}: {count}"
+            for intent, count in sorted(dist.items(), key=lambda x: -x[1])
+            if count > 0
+        ]
+        if dist_parts:
+            lines.append(
+                f"- **Distribution:** {', '.join(dist_parts)} "
+                f"(over {classified_n} classified organic URLs)"
+            )
+
+        if is_mixed and mixed_comps:
+            lines.append(f"- **Mixed-intent components:** {', '.join(mixed_comps)}")
+
+        if mis is not None:
+            lines.append(f"- **Strategy:** {mis}")
+            mixed_notes.append((kw, mixed_comps, mis))
+
+        if dominant_pattern:
+            lines.append(f"- **Title patterns:** {dominant_pattern} dominant")
+        else:
+            lines.append("- **Title patterns:** No dominant pattern detected")
+
+        lines.append("")
+
+    # Mixed-intent strategic callouts
+    if mixed_notes:
+        lines.append("---")
+        lines.append("")
+        lines.append("### ⚖️ Mixed-Intent Strategic Notes")
+        lines.append("")
+        for kw, comps, strategy in mixed_notes:
+            comp_str = " + ".join(comps) if comps else "multiple intents"
+            lines.append(
+                f"The keyword **{kw}** shows mixed search intent ({comp_str}). "
+                f"Recommended approach: **{strategy}**."
+            )
+            lines.append("")
+            if strategy == "compete_on_dominant":
+                lines.append(
+                    "- *compete_on_dominant*: Match the dominant intent format directly."
+                )
+            elif strategy == "backdoor":
+                lines.append(
+                    "- *backdoor*: Produce content matching a non-dominant but "
+                    "client-aligned intent. Likely to outrank head-on competitors via differentiation."
+                )
+            elif strategy == "avoid":
+                lines.append(
+                    "- *avoid*: No good fit for the client's content capabilities."
+                )
+            lines.append("")
 
     return "\n".join(lines).strip()
 
@@ -2268,6 +2405,13 @@ def list_recommendations(data, args):
         progress("[6/7] Generating local heuristic report...")
         report = generate_local_report(extracted, context, warnings)
         progress("[done] Local report generated. Writing report to disk...")
+
+    # Spec Fix 4: prepend deterministic SERP intent section before saving.
+    # This ensures the section is always present regardless of LLM compliance.
+    kw_profiles = extracted.get("keyword_profiles", {})
+    serp_intent_section = generate_serp_intent_section(kw_profiles)
+    if serp_intent_section:
+        report = serp_intent_section + "\n\n---\n\n" + report
 
     with open(args.report_out, "w", encoding="utf-8") as f:
         f.write(report + "\n")

@@ -3,11 +3,13 @@ classifiers.py
 Rules-based classifiers for Content Type (URL/Page level) and Entity Type (Domain level).
 """
 import os
+import re
 import yaml
 
 import json
 
 RULES_PATH = os.path.join(os.path.dirname(__file__), "classification_rules.json")
+URL_PATTERN_RULES_PATH = os.path.join(os.path.dirname(__file__), "url_pattern_rules.yml")
 
 def load_rules():
     if os.path.exists(RULES_PATH):
@@ -15,15 +17,53 @@ def load_rules():
             return json.load(f)
     return {}
 
+
+def load_url_pattern_rules():
+    """Load url_pattern_rules.yml. Returns list of rule dicts (empty on error)."""
+    if not os.path.exists(URL_PATTERN_RULES_PATH):
+        return []
+    try:
+        with open(URL_PATTERN_RULES_PATH, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("url_pattern_rules", [])
+    except Exception:
+        return []
+
+
+_URL_PATTERN_RULES = load_url_pattern_rules()
+
+
+def classify_url_from_patterns(url: str, entity_type: str) -> str | None:
+    """Apply url_pattern_rules.yml to a URL+entity_type pair.
+
+    Returns the content_type string if a rule matches, else None.
+    Only called as a fallback when HTML classification produced 'other',
+    'unknown', or 'N/A'.
+    """
+    url_lower = (url or "").lower()
+    entity_lower = (entity_type or "").lower()
+    for rule in _URL_PATTERN_RULES:
+        allowed = [e.lower() for e in rule.get("entity_types", ["any"])]
+        if "any" not in allowed and entity_lower not in allowed:
+            continue
+        pattern = rule.get("pattern", "")
+        if pattern and re.search(pattern, url_lower):
+            return rule.get("content_type")
+    return None
+
+
 RULES = load_rules()
 ENTITY_TYPES = RULES.get("entity_types", [])
 ENTITY_TYPE_DESCRIPTIONS = RULES.get("entity_type_descriptions", {})
 
 class ContentClassifier:
-    def classify(self, url, soup, headers):
+    def classify(self, url, soup, headers, entity_type=None):
         """
         Classifies content type based on URL, HTML content (BeautifulSoup object), and Headers.
         Returns: (content_type, confidence, evidence_list)
+
+        When soup is None and the URL matches a url_pattern_rules.yml rule, the
+        URL-pattern classification is returned instead of 'unknown'.
         """
         evidence = []
         patterns = RULES.get("content_patterns", {})
@@ -39,6 +79,10 @@ class ContentClassifier:
             return 'directory', 0.8, evidence
 
         if not soup:
+            # Fix 5b: apply URL pattern fallback rules before giving up.
+            url_pattern_ct = classify_url_from_patterns(url, entity_type or "")
+            if url_pattern_ct:
+                return url_pattern_ct, 0.6, ["url_pattern_rule"]
             return 'unknown', 0.0, ["no_content"]
 
         text = soup.get_text(" ", strip=True).lower()

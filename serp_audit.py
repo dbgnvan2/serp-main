@@ -1446,7 +1446,14 @@ def build_competitor_handoff(
     Selects the top *n* organic URLs per keyword, excluding the client's own
     domain and any domain in *omit_from_audit*.  Returns the handoff dict; the
     caller is responsible for writing it.
+
+    Returns None if:
+    - all_organic is empty or None (no SERP data was collected — nothing to hand off)
+    - schema validation fails (schema violation logged)
     """
+    if not all_organic:
+        logging.info("No organic results — competitor handoff not produced.")
+        return None
     omit_set = {d.lower() for d in (omit_from_audit or [])}
     client_domain_lower = (client_domain or "").lower()
 
@@ -2197,6 +2204,39 @@ def main():
     else:
         logging.error("Competitor handoff NOT written due to schema validation failure.")
 
+    # --- INJECT SERP INTENT COLUMNS INTO OVERVIEW + BUILD DETAIL SHEET ---
+    _kw_profiles = full_data.get("keyword_profiles", {})
+    _serp_intent_detail_rows = []
+    for _m in all_metrics:
+        _kw = _m.get("Root_Keyword") or _m.get("Source_Keyword") or ""
+        _p = _kw_profiles.get(_kw, {})
+        _si = _p.get("serp_intent") or {}
+        _tp = _p.get("title_patterns") or {}
+        _pi = _si.get("primary_intent")
+        _m["Primary_Intent"] = str(_pi) if _pi is not None else "null"
+        _m["Intent_Confidence"] = _si.get("confidence", "")
+        _m["Mixed_Intent_Strategy"] = _p.get("mixed_intent_strategy") or ""
+        _ev = _si.get("evidence") or {}
+        _dist = _si.get("intent_distribution") or {}
+        _serp_intent_detail_rows.append({
+            "Root_Keyword": _kw,
+            "Run_ID": _m.get("Run_ID", ""),
+            "Primary_Intent": str(_pi) if _pi is not None else "null",
+            "Is_Mixed": _si.get("is_mixed", False),
+            "Mixed_Components": ", ".join(_si.get("mixed_components") or []),
+            "Confidence": _si.get("confidence", ""),
+            "Organic_URL_Count": _ev.get("organic_url_count", 0),
+            "Classified_Count": _ev.get("classified_organic_url_count", 0),
+            "Informational_Count": _dist.get("informational", 0),
+            "Commercial_Investigation_Count": _dist.get("commercial_investigation", 0),
+            "Transactional_Count": _dist.get("transactional", 0),
+            "Navigational_Count": _dist.get("navigational", 0),
+            "Local_Count": _dist.get("local", 0),
+            "Uncategorised_Count": _ev.get("uncategorised_organic_url_count", 0),
+            "Local_Pack_Present": _ev.get("local_pack_present", False),
+            "Title_Dominant_Pattern": _tp.get("dominant_pattern") or "",
+        })
+
     print("Saving to Excel...")
     try:
         with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
@@ -2235,6 +2275,9 @@ def main():
             if all_feasibility:
                 pd.DataFrame(all_feasibility).to_excel(
                     writer, sheet_name="Keyword_Feasibility", index=False)
+            if _serp_intent_detail_rows:
+                pd.DataFrame(_serp_intent_detail_rows).to_excel(
+                    writer, sheet_name="SERP_Intent_Detail", index=False)
 
         print(f"SUCCESS! Data saved to {OUTPUT_FILE}")
     except Exception as e:

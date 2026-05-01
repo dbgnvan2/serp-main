@@ -520,8 +520,8 @@ If you don't act now, you'll lose your rank #3 position entirely.
                          and "couples therapy vancouver" in i]
         self.assertEqual(len(intent_issues), 0)
 
-    def test_validate_llm_report_flags_dominant_pattern_contradiction_soft(self):
-        # dominant_pattern=how_to but report claims listicles dominate — SOFT-FAIL
+    def test_validate_llm_report_flags_dominant_pattern_contradiction_hard(self):
+        # Fix 7: dominant_pattern mismatch is now HARD-FAIL (not soft).
         extracted = self._intent_extracted(
             primary_intent="informational", dominant_pattern="how_to"
         )
@@ -533,12 +533,12 @@ If you don't act now, you'll lose your rank #3 position entirely.
         pattern_issues = [i for i in issues if "title_patterns" in i.lower()
                           and "couples therapy vancouver" in i]
         self.assertGreaterEqual(len(pattern_issues), 1)
-        # Soft-fail: should NOT trigger has_hard_validation_failures
-        self.assertFalse(gcb.has_hard_validation_failures(pattern_issues))
-        # Should partition to notes, not blocking
+        # Hard-fail: must trigger has_hard_validation_failures
+        self.assertTrue(gcb.has_hard_validation_failures(pattern_issues))
+        # Should partition to blocking, not notes
         blocking, notes = gcb.partition_validation_issues(pattern_issues)
-        self.assertEqual(len(blocking), 0)
-        self.assertGreaterEqual(len(notes), 1)
+        self.assertGreaterEqual(len(blocking), 1)
+        self.assertEqual(len(notes), 0)
 
     def test_mixed_intent_strategy_compete_on_dominant(self):
         """A mixed SERP whose dominant intent matches an intent the client
@@ -703,6 +703,23 @@ If you don't act now, you'll lose your rank #3 position entirely.
         invented = [i for i in issues
                     if "no pattern reached the dominance threshold" in i.lower()]
         self.assertGreaterEqual(len(invented), 1)
+
+    def test_validate_llm_report_flags_confidence_upgrade_soft(self):
+        # confidence=low but LLM claims high — SOFT fail (notes, not blocking)
+        extracted = self._intent_extracted(primary_intent="informational", confidence="low")
+        report = (
+            "**couples therapy vancouver (50,000 total results)**\n"
+            "Confidence: high. This is a well-classified informational SERP.\n"
+        )
+        issues = gcb.validate_llm_report(report, extracted)
+        conf_issues = [i for i in issues if "serp_intent.confidence" in i]
+        self.assertGreaterEqual(len(conf_issues), 1)
+        # SOFT fail: must NOT trigger hard validation failure
+        self.assertFalse(gcb.has_hard_validation_failures(conf_issues))
+        # Must partition to notes, not blocking
+        blocking, notes = gcb.partition_validation_issues(conf_issues)
+        self.assertEqual(len(blocking), 0)
+        self.assertGreaterEqual(len(notes), 1)
 
 
 if __name__ == "__main__":
