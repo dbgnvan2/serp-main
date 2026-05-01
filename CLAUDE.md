@@ -22,36 +22,37 @@ MOZ_TOKEN=<your_token>              # Fallback DA provider (free tier: 50 rows/m
 
 ```bash
 source venv/bin/activate
-python -m pytest test_*.py -q
+python3 -m pytest test_*.py -q
 ```
 
 Tests do **not** require API keys — all external calls are mocked. The `test_serp_launcher.py` tests are skipped if tkinter is unavailable (headless environments).
 
-Expected: 181 passing, 5 skipped, 0 errors.
+Expected: 330 passing, 5 skipped, 0 errors.
 
 ## Key Entry Points
 
 | Command | Purpose |
 |---------|---------|
-| `python serp-me.py` | GUI launcher (daily workflow) |
-| `python serp_audit.py` | Fetch & parse SERPs, write JSON/XLSX/MD |
-| `python run_pipeline.py` | Full pipeline (audit → validation → refresh) |
-| `python run_feasibility.py --json <file>` | Standalone DA feasibility analysis |
-| `python generate_content_brief.py --json <file> --list` | LLM content brief |
-| `python refresh_analysis_outputs.py --json <file> --xlsx <file>` | Re-classify without re-fetching |
-| `python export_history.py` | Export SQLite history to CSV |
-| `python visualize_volatility.py --keyword <kw>` | Plot rank volatility |
+| `python3 serp-me.py` | GUI launcher (daily workflow) |
+| `python3 serp_audit.py` | Fetch & parse SERPs, write JSON/XLSX/MD + competitor handoff |
+| `python3 run_pipeline.py` | Full pipeline (audit → validation → refresh) |
+| `python3 run_feasibility.py --json <file>` | Standalone DA feasibility analysis |
+| `python3 generate_content_brief.py --json <file> --list` | LLM content brief |
+| `python3 refresh_analysis_outputs.py --json <file> --xlsx <file>` | Re-classify without re-fetching |
+| `python3 export_history.py` | Export SQLite history to CSV |
+| `python3 visualize_volatility.py --keyword <kw>` | Plot rank volatility |
 
 ## Architecture
 
 ```
 keywords.csv
     └─► serp_audit.py (fetch + parse + enrich)
-            ├─► raw/{run_id}/              raw JSON from SerpAPI
-            ├─► market_analysis_*.json     aggregated data
-            ├─► market_analysis_*.xlsx     Excel workbook
-            ├─► market_analysis_*.md       markdown summary
-            └─► serp_data.db               SQLite history
+            ├─► raw/{run_id}/                    raw JSON from SerpAPI
+            ├─► market_analysis_*.json           aggregated data
+            ├─► market_analysis_*.xlsx           Excel workbook
+            ├─► market_analysis_*.md             markdown summary
+            ├─► competitor_handoff_*.json        validated handoff for Tool 2 (Gap 3)
+            └─► serp_data.db                     SQLite history
 
 market_analysis_*.json
     ├─► run_feasibility.py (DA gap analysis — standalone, runs any time)
@@ -84,6 +85,8 @@ market_analysis_*.json
 | `url_enricher.py` | URL fetching & feature extraction |
 | `serp-me.py` | Tkinter GUI launcher |
 | `run_pipeline.py` | Pipeline orchestration |
+| `handoff_schema.json` | Spec v2 Gap 3 — draft-07 JSON Schema for `competitor_handoff_*.json`; `additionalProperties: false` enforces contract |
+| `test_validation_consistency.py` | Spec v2 Gap 5 — canary test scanning prompts for `keyword_profiles.<field>` references and asserting each has a validator rule |
 
 ### Prompt Templates
 
@@ -103,6 +106,9 @@ prompts/
 - `app.*` — API mode flags (`balanced_mode`, `deep_research_mode`)
 - `moz.cache_ttl_days` — DA cache lifetime in days (default 30)
 - `feasibility.*` — DA gap thresholds, client DA, neighbourhoods, pivot settings
+- `audit_targets.n` — top-N organic URLs per keyword exported to competitor handoff (default 10)
+- `audit_targets.omit_from_audit` — domains excluded from the handoff (never sent to Tool 2)
+- `client.preferred_intents` — intents the client can produce content for; drives `mixed_intent_strategy`
 - `analysis_report.*` — client context injected into LLM prompts
 
 **`domain_overrides.yml`** — manual entity type overrides (e.g., `psychologytoday.com: directory`).
@@ -193,9 +199,11 @@ All schema changes use `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE … ADD COLU
 ## LLM Validation Strategy
 
 `generate_content_brief.py` validates LLM outputs before writing:
-1. Hard-fail (abort): AI Overview count mismatch vs. extracted data
-2. Soft-fail (1 retry): Wording issues → sends correction prompt
+1. Hard-fail (abort): AI Overview count mismatch vs. extracted data; `serp_intent.primary_intent` or `is_mixed` contradictions
+2. Soft-fail (1 retry): Wording issues, `title_patterns.dominant_pattern` contradictions, `mixed_intent_strategy` contradictions → sends correction prompt
 3. Failed validations written to `*.validation.md` for inspection
+
+`test_validation_consistency.py` (spec v2 Gap 5) is a canary that scans the prompt files for `keyword_profiles.<field>` references and asserts each has a corresponding mention in `validate_llm_report`. Run it after adding new pre-computed fields to catch missed validators early.
 
 ## Workflow Convention
 

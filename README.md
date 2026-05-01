@@ -1,269 +1,272 @@
-# serp
+# SERP Intelligence Tool
 
-## Overview
+Market intelligence for [Living Systems Counselling](https://livingsystems.ca) — a Bowen Family Systems Theory nonprofit in North Vancouver, BC.
 
-A Market Intelligence Tool designed to support the "Bridge Strategy" for a non-profit counselling agency. It maps "Problem-Aware" queries to "Solution-Aware" content using SERP data.
+The tool scrapes Google search results (SERPs) for a keyword set, enriches and classifies every competitor URL, scores how feasible it is for Living Systems to rank, and uses an Anthropic LLM to write a strategic content brief that maps what people are actually searching for to content Living Systems can realistically create.
 
-## Spec v2 Pre-Computed Fields (per keyword)
+---
 
-Each keyword profile in the JSON output now includes deterministic, rule-driven fields the LLM consumes directly (instead of inferring):
+## What it produces
 
-- `serp_intent` — `{primary_intent, is_mixed, confidence, intent_distribution, evidence}`. Driven by `intent_mapping.yml` (rule table mapping content_type + entity_type + local_pack + domain_role → intent). Confidence reflects what fraction of URLs were classifiable.
-- `title_patterns` — shape pattern of top-10 titles (`how_to`, `what_is`, `listicle_numeric`, `vs_comparison`, `best_of`, `brand_only`, `question`, `other`). `dominant_pattern` is set only when one pattern reaches ≥4 of 10.
-- `mixed_intent_strategy` — `compete_on_dominant` / `backdoor` / `avoid` / `null`. Only set on mixed-intent SERPs. Driven by `client.preferred_intents` in `config.yml`.
+For each keyword set you run, the tool writes:
 
-The LLM validator hard-fails if the report contradicts `serp_intent.primary_intent` or `is_mixed`, and soft-fails (1 retry) on `title_patterns.dominant_pattern` or `mixed_intent_strategy` contradictions. See CLAUDE.md for full details.
+| File | What it is |
+|------|-----------|
+| `output/market_analysis_<topic>_<timestamp>.json` | Full structured data — the source of truth for all downstream steps |
+| `output/market_analysis_<topic>_<timestamp>.xlsx` | Same data in Excel, one sheet per data type |
+| `output/market_analysis_<topic>_<timestamp>.md` | Markdown summary |
+| `output/competitor_handoff_<topic>_<timestamp>.json` | Validated competitor list for Tool 2 (serp-compete) |
+| `content_opportunities_<topic>_<timestamp>.md` | LLM content brief — which pages to create and why |
+| `advisory_briefing_<topic>_<timestamp>.md` | Executive advisory — strategic framing and priorities |
+| `feasibility_<topic>_<timestamp>.md` | Domain Authority gap analysis — how hard each keyword is to rank for |
 
-## Installation
+---
 
-**Prerequisites:**
+## One-time setup
 
-- Python 3.8+
-- A valid SerpApi Key
-
-1. Create a virtual environment:
-
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Set your API Key:
-   ```bash
-   export SERPAPI_KEY="your_api_key_here"
-   ```
-
-## Running the Tool
-
-To execute the full pipeline (Audit -> Validation -> Verification):
+**Prerequisites:** Python 3.12+, a SerpAPI account, and an Anthropic API account.
 
 ```bash
-python run_pipeline.py
+cd /path/to/serp-discover
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-To launch the GUI with the pinned Python 3.12 interpreter:
+Create a `.env` file at the repo root:
 
-```bash
-./run_serp_launcher.sh
+```
+SERPAPI_KEY=your_serpapi_key
+ANTHROPIC_API_KEY=your_anthropic_key
+DATAFORSEO_LOGIN=your_dataforseo_email
+DATAFORSEO_PASSWORD=your_dataforseo_password
 ```
 
-In the GUI, keyword input is now file-based:
+- **SerpAPI** — required for all SERP fetches
+- **Anthropic** — required only for the content brief and advisory steps
+- **DataForSEO** — required for Domain Authority feasibility scoring (pay-per-use, ~$0.002/domain, cached 30 days)
 
-- select an existing `keywords.csv` or `keywords_*.csv` file from the dropdown, or
-- enter `New Keywords (comma separated)` to create a new keyword file, or
-- do both to merge new keywords into an existing file
+---
 
-The launcher now:
+## Daily workflow — GUI launcher
 
-- auto-creates keyword files named from the first keyword
-- updates `config.yml` to point `files.input_csv` at the selected file
-- auto-names outputs to match the keyword-file slug
-- never overwrites prior outputs; each run gets a timestamp suffix
-- keeps SerpApi cache enabled by default (`serpapi.no_cache: false`)
-- limits `A.1/A.2` AI-likely query alternatives to high-priority keywords from the latest analysis
-- runs related-question AI follow-up only when `Deep Research Mode` is enabled
-- exposes three API usage modes in the launcher:
-  - `Low API Mode`
-  - `Balanced Mode`
-  - `Deep Research Mode`
-
-Example:
+The GUI is the recommended way to run everything:
 
 ```bash
+source venv/bin/activate
+python3 serp-me.py
+```
+
+The launcher walks through each step in order. After a pipeline run it automatically updates `config.yml` so all downstream steps find the right files.
+
+### Steps in order
+
+| Step | What it does |
+|------|-------------|
+| **1. Run Full Pipeline** | Fetches SERPs, classifies every URL, scores feasibility, writes JSON/XLSX/MD. This is the expensive step (SerpAPI calls). |
+| **2. Fetch SERPs Only** | Fetches without running validation — useful for debugging. |
+| **3. List Content Opportunities** | Calls Anthropic LLM to generate the content brief and advisory. Reads the JSON from Step 1. |
+| **4. Refresh Analysis Outputs** | Re-classifies URLs and rewrites reports without re-fetching SERPs. Use after approving domain overrides. |
+| **5. Export History** | Dumps the SQLite rank history to CSV files. |
+| **6. Review Domain Overrides** | Opens a checklist of domains whose entity type (counselling, directory, legal, etc.) may need manual correction. Approve to update `domain_overrides.yml`. |
+| **7. Feasibility Analysis** | Re-runs Domain Authority gap scoring from the existing JSON. Cached — free to run multiple times. |
+
+### API usage modes
+
+Set in the launcher before running Step 1:
+
+| Mode | Pages fetched | AI follow-up | When to use |
+|------|-------------|-------------|-------------|
+| **Low API** | 1 Google, 1 Maps | No | Quick monitoring check |
+| **Balanced** *(default)* | 3 Google, 1 Maps | Defend/Strengthen only | Regular analysis runs |
+| **Deep Research** | Configurable | Yes (up to 5 calls) | Quarterly strategic research |
+
+---
+
+## Command-line equivalents
+
+If you prefer the CLI or are running headlessly:
+
+```bash
+source venv/bin/activate
+
+# Full pipeline
+python3 run_pipeline.py
+
+# Content brief only (after pipeline has run)
+python3 generate_content_brief.py --json output/market_analysis_<topic>_<timestamp>.json --list
+
+# Feasibility analysis only (free re-run — uses DA cache)
+python3 run_feasibility.py --json output/market_analysis_<topic>_<timestamp>.json
+
+# Re-classify without re-fetching
+python3 refresh_analysis_outputs.py \
+  --json output/market_analysis_<topic>_<timestamp>.json \
+  --xlsx output/market_analysis_<topic>_<timestamp>.xlsx
+
+# Export SQLite history to CSV
+python3 export_history.py
+
+# Plot rank volatility for a keyword
+python3 visualize_volatility.py --keyword "couples counselling North Vancouver"
+```
+
+---
+
+## Keyword files
+
+Keywords are stored in CSV files, one keyword per row, no header. Name the file to match the topic:
+
+```
+keywords_couples_therapy.csv
 keywords_estrangement.csv
-market_analysis_estrangement_20260311_1415.xlsx
-market_analysis_estrangement_20260311_1415.json
-market_analysis_estrangement_20260311_1415.md
-content_opportunities_estrangement_20260311_1415.md
-advisory_briefing_estrangement_20260311_1415.md
+keywords_Couple_Marriage_RelationshipLocal.csv
 ```
 
-## Content Opportunities Report
+The output slug is derived from the filename (e.g. `keywords_couples_therapy.csv` → outputs named `market_analysis_couples_therapy_<timestamp>.*`).
 
-`List Content Opportunities` now generates a richer report using the
-topic-matched JSON from the selected keyword file and writes:
+---
+
+## Configuration — `config.yml`
+
+Key sections:
+
+```yaml
+serpapi:
+  location: Vancouver, British Columbia, Canada
+  google_max_pages: 3        # pages per keyword (Balanced mode)
+  maps_max_pages: 3
+
+files:
+  input_csv: keywords_Couple_Marriage_RelationshipLocal.csv   # auto-updated by GUI
+
+enrichment:
+  max_urls_per_keyword: 5    # URLs fully fetched and analysed per keyword
+
+feasibility:
+  enabled: true
+  client_da: 35              # Living Systems domain authority
+  pivot_serp_fetch: true     # check local 3-pack for pivot keywords
+
+audit_targets:
+  n: 10                      # top-N competitor URLs sent to serp-compete (Tool 2)
+  omit_from_audit: []        # domains to exclude from handoff
+
+client:
+  preferred_intents:         # intents Living Systems can produce content for
+    - informational
+    - transactional
+    - local
+
+analysis_report:
+  client_name: Living Systems Counselling
+  client_domain: livingsystems.ca
+  location: North Vancouver, BC, Canada
+  framework_description: Bowen Family Systems Theory ...
+```
+
+**`domain_overrides.yml`** — manual entity type corrections for specific domains (e.g. forcing `psychologytoday.com` to `directory`).
+
+**`intent_mapping.yml`** — rule table mapping `(content_type, entity_type, local_pack, domain_role)` → SERP intent. Edit this to refine intent assignments; domain judgment lives here, not in Python.
+
+---
+
+## Feasibility scoring
+
+Gap = average competitor Domain Authority − Living Systems DA (35).
+
+| Gap | Status | What it means |
+|-----|--------|---------------|
+| ≤ 5 | ✅ High Feasibility | Rankable with content quality alone |
+| 6–15 | ⚠️ Moderate Feasibility | Needs local backlink building |
+| > 15 | 🔴 Low Feasibility | High-authority incumbents — pivot to neighbourhood variant |
+
+Low-feasibility keywords get a neighbourhood pivot suggestion (e.g. "Couples Counselling" → "Couples Counselling Lonsdale"). DA results are cached in SQLite for 30 days — re-running feasibility within that window costs nothing.
+
+---
+
+## LLM models
+
+The content brief uses two model calls:
+
+| Pass | Default model | Purpose |
+|------|-------------|---------|
+| Main report | `claude-opus-4-6` | Full per-keyword analysis and recommendations |
+| Advisory briefing | `claude-sonnet-4-20250514` | Executive framing |
+
+You can override both in the GUI launcher or with `--llm-model` / `--advisory-model` CLI flags.
+
+**Approximate LLM cost per run:** $0.08–$0.40 depending on model and keyword count.
+
+---
+
+## What the LLM receives (pre-computed fields)
+
+To keep the LLM honest and reduce hallucination, the tool pre-computes deterministic verdicts before sending anything to the model:
+
+- **`serp_intent`** — primary intent (informational / commercial_investigation / transactional / navigational / local / uncategorised), whether the SERP is mixed-intent, and confidence level. Driven by `intent_mapping.yml`.
+- **`title_patterns`** — shape analysis of the top-10 organic titles (how_to, what_is, best_of, etc.). `dominant_pattern` is only set when one shape reaches ≥4 of 10 titles.
+- **`mixed_intent_strategy`** — when the SERP is mixed-intent: `compete_on_dominant`, `backdoor`, or `avoid`. Driven by `client.preferred_intents` in `config.yml`.
+
+The validator hard-fails if the LLM report contradicts `serp_intent.primary_intent` or `is_mixed`, and soft-fails (one retry) on `title_patterns.dominant_pattern` or `mixed_intent_strategy` contradictions. If validation fails after retry, a companion `.validation.md` file is written explaining the rejected claims.
+
+---
+
+## Competitor handoff (serp-compete integration)
+
+After every pipeline run, the tool writes:
+
+```
+output/competitor_handoff_<topic>_<timestamp>.json
+```
+
+This is the input file for **serp-compete** (Tool 2), which audits the top competitor pages in depth. The file is validated against `handoff_schema.json` (draft-07) before being written — if validation fails, no file is written and the error is logged. The `audit_targets` block in `config.yml` controls how many URLs are included and which domains to exclude.
+
+---
+
+## Domain override review
+
+After a pipeline run the GUI auto-opens a domain override checklist if candidates exist. You can also run it manually:
 
 ```bash
-content_opportunities_<topic>.md
-advisory_briefing_<topic>.md
+python3 generate_domain_override_candidates.py \
+  --json output/market_analysis_<topic>_<timestamp>.json \
+  --overrides domain_overrides.yml \
+  --out domain_override_candidates.md
 ```
 
-If you select plain `keywords.csv`, the launcher now falls back to the
-latest matching analysis topic instead of assuming the topic slug is
-literally `keywords`.
-
-It uses Anthropic with file-based prompt assets and loads client context
-from `config.yml` under `analysis_report`.
-
-Prompt assets now live in dedicated files:
-
-- `prompts/main_report/system.md`
-- `prompts/main_report/user_template.md`
-- `prompts/advisory/system.md`
-- `prompts/advisory/user_template.md`
-- `prompts/correction/user_template.md`
-
-The combined file `serp_analysis_prompt_v3.md` is now a legacy reference.
-The extraction and implementation notes are split into `docs/extraction_spec.md`.
-
-Required for launcher mode:
-
-- `ANTHROPIC_API_KEY` env var
-- `anthropic` Python package
-
-The launcher now lets you choose separate models for:
-
-- the main report
-- the advisory briefing
-
-Recommended default:
-
-- Main report: `claude-opus-4-6`
-- Advisory briefing: `claude-sonnet-4-20250514` by default,
-  or `claude-opus-4-6` if you want a slower, higher-quality second pass
-
-For lower SerpApi usage in routine runs:
-
-### Low API Mode
-
-- cheapest monitoring mode
-- 1 Google page
-- 1 Maps page
-- no A.1 / A.2
-- no related-question AI follow-up
-
-### Balanced Mode
-
-- recommended default for real analysis
-- 3 Google pages
-- 1 Maps page
-- keeps main AI Overview collection
-- keeps AI fallback without location
-- no related-question AI follow-up
-- A.1 / A.2 only for `defend` / `strengthen` keywords when enabled
-
-### Deep Research Mode
-
-- highest-cost exploratory mode
-- use for monthly or quarterly strategic research
-- allows related-question AI exploration
-
-Recommended routine setting:
-
-- `Balanced Mode` on
-- `Deep Research Mode` off
-- `Low API Mode` off
-- `Run 2 AI-likely alternatives` off unless you specifically want A.1 / A.2 on top-priority terms
-
-The audit log now prints a running `SerpApi Call Count` and a final
-`Total SerpApi Calls` summary for each run.
-
-If LLM access is unavailable, `List Content Opportunities` fails (no fallback).
-If the LLM returns a report that contradicts the pre-verified extraction
-facts, the script now fails evidence validation instead of writing the
-report. When validation fails after retry, the script writes a companion
-artifact next to the intended output, such as:
+After approving overrides, refresh the analysis without re-fetching:
 
 ```bash
-content_opportunities_report.validation.md
-advisory_briefing.validation.md
+python3 refresh_analysis_outputs.py \
+  --json output/market_analysis_<topic>_<timestamp>.json \
+  --xlsx output/market_analysis_<topic>_<timestamp>.xlsx
 ```
 
-These files list the rejected claims and include the rejected draft text.
-Hard factual contradictions such as AI Overview count mismatches now fail
-fast without a retry. Softer issues, such as wording or speculative
-phrasing, still get one correction retry.
-
-Entity-label interpretation conflicts are now treated as recoverable
-report notes rather than fatal errors. If the model describes a mixed or
-plurality keyword too strongly, the report is still written with a
-`Data Interpretation Notes` section that tells the reader to treat that
-keyword as mixed/contested.
-
-The report-generation log now distinguishes:
-
-- extracted data object size
-- main report prompt payload size
-
-This makes it easier to see what is stored internally versus what is
-actually sent to the model.
-
-You can bypass first-pass report validation only with:
-
-```bash
-python generate_content_brief.py --json market_analysis_v2.json --list --use-llm --allow-unverified-report
-```
-
-## Domain Override Review
-
-The full pipeline now also generates:
-
-```bash
-domain_override_candidates.md
-```
-
-This report lists recurring domains that are not already in
-`domain_overrides.yml` and may be worth adding after review. You can
-also generate it directly with:
-
-```bash
-python generate_domain_override_candidates.py --json market_analysis_v2.json --overrides domain_overrides.yml --out domain_override_candidates.md
-```
-
-By default it suppresses low-confidence unclassified domains and focuses
-on domains that are more likely to benefit from an override.
-
-In the GUI, `6. Review Domain Override Candidates` now opens an in-app
-checklist. High-confidence items are pre-checked, lower-confidence items
-are left unchecked, and `Approve Checked` writes only the selected domains
-into `domain_overrides.yml`. You can also choose the category for the
-selected domain before approval. The current entity categories are:
-`counselling`, `legal`, `directory`, `nonprofit`, `government`,
-`media`, `professional_association`, and `education`.
-
-When `Run Full Pipeline` finishes successfully in the GUI, the app now
-auto-opens this review window if candidates exist. After you approve
-checked domains, the app refreshes the current JSON/XLSX analysis files
-locally so `List Content Opportunities` uses the updated entity labels
-without requiring another SERP fetch.
-
-CLI equivalent:
-
-```bash
-python apply_domain_override_candidates.py --json market_analysis_v2.json --overrides domain_overrides.yml
-python refresh_analysis_outputs.py --json market_analysis_v2.json --xlsx market_analysis_v2.xlsx --overrides domain_overrides.yml
-```
-
-## Utilities
-
-**Visualize Volatility:** Plot rank history for a keyword.
-
-```bash
-python visualize_volatility.py --list
-python visualize_volatility.py --keyword "Free counselling North Vancouver"
-```
-
-**Export History:** Dump SQLite database to CSVs.
-
-```bash
-python export_history.py
-```
+---
 
 ## Testing
 
-To run the regression tests:
-
 ```bash
-python -m unittest test_enrichment.py
-python -m unittest test_serp_audit.py
-python -m unittest test_generate_content_brief.py
-python -m unittest test_generate_domain_override_candidates.py
-python -m unittest test_apply_domain_override_candidates.py
-python -m unittest test_refresh_analysis_outputs.py
+source venv/bin/activate
+python3 -m pytest test_*.py -q
+# Expected: 330 passed, 5 skipped (tkinter tests skipped in headless environments)
 ```
+
+All tests run without API keys — external calls are mocked.
+
+---
+
+## Output file naming
+
+Files follow this convention:
+
+```
+market_analysis_<topic>_<YYYYMMDD_HHMM>.json
+competitor_handoff_<topic>_<YYYYMMDD_HHMM>.json
+content_opportunities_<topic>_<YYYYMMDD_HHMM>.md
+advisory_briefing_<topic>_<YYYYMMDD_HHMM>.md
+feasibility_<topic>_<YYYYMMDD_HHMM>.md
+```
+
+The `<topic>` slug comes from the keyword CSV filename. The GUI updates `config.yml` with the latest paths after each run so all downstream steps automatically find the right files.
