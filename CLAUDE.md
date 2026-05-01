@@ -1,225 +1,93 @@
-# SERP Intelligence Tool — CLAUDE.md
+# SERP Intelligence Tool
 
-## Project Overview
+Market intelligence tool for Living Systems Counselling (livingsystems.ca),
+a Bowen Family Systems Theory nonprofit in North Vancouver, BC. Scrapes
+Google SERPs via SerpAPI, generates content briefs via Anthropic API, scores
+keyword feasibility via Domain Authority gap analysis.
 
-A market intelligence tool built for Living Systems Counselling (livingsystems.ca), a small Bowen Family Systems Theory nonprofit in North Vancouver, BC. It scrapes Google SERPs via SerpAPI, enriches results with URL content analysis, uses Anthropic LLMs to generate strategic content recommendations using a "Bridge Strategy" — mapping Problem-Aware search queries to Solution-Aware counselling content — and scores keyword competitiveness using Domain Authority gap analysis.
+## Always do this
 
-## Environment Setup
+- **Activate venv first**: `source venv/bin/activate` before any Python
+  command. Tests and scripts will fail in confusing ways without it.
+- **Run tests with**: `python3 -m pytest test_*.py -q`
+  (expects 358 passing, 5 skipped, 0 errors).
+- **Never `git add .`** — the repo accumulates output and draft files that
+  must stay local. Only commit files intentionally changed for the current
+  chunk.
+- **Push after each logical chunk** of work (feature module + tests,
+  validation rule + tests, doc update). Don't accumulate sweeping diffs.
+- **Edit configuration, not Python.** Intent rules belong in
+  `intent_mapping.yml`, entity overrides in `domain_overrides.yml`, client
+  context in `config.yml`. Do not push exceptions or hardcoded values into
+  `.py` files.
 
-```bash
-# Always activate venv before running Python commands
-source venv/bin/activate
+## Required env vars (in `.env`)
 
-# Required env vars (.env file)
-SERPAPI_KEY=<your_key>
-ANTHROPIC_API_KEY=<your_key>        # Only needed for content brief generation
-DATAFORSEO_LOGIN=<your_email>       # Primary DA provider (pay-per-use)
-DATAFORSEO_PASSWORD=<your_api_pw>   # From DataForSEO dashboard
-MOZ_TOKEN=<your_token>              # Fallback DA provider (free tier: 50 rows/month)
-```
+- `SERPAPI_KEY` — required for SERP fetching.
+- `ANTHROPIC_API_KEY` — required for content brief generation.
+- `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` — primary DA provider
+  (pay-per-use).
+- `MOZ_TOKEN` — fallback DA provider (free tier: 50 rows/month).
 
-## Running Tests
+Tests do not require API keys — all external calls are mocked.
 
-```bash
-source venv/bin/activate
-python3 -m pytest test_*.py -q
-```
+## Output naming
 
-Tests do **not** require API keys — all external calls are mocked. The `test_serp_launcher.py` tests are skipped if tkinter is unavailable (headless environments).
+`market_analysis_{topic}_{YYYYMMDD_HHMM}.{json,xlsx,md}` plus
+`competitor_handoff_{topic}_{YYYYMMDD_HHMM}.json`.
 
-Expected: 358 passing, 5 skipped, 0 errors.
+Topic slug derives from the keyword CSV filename (lowercase, spaces →
+underscores). The GUI auto-updates `config.yml` with the latest paths.
 
-## Key Entry Points
+## Configuration files
 
-| Command | Purpose |
-|---------|---------|
-| `python3 serp-me.py` | GUI launcher (daily workflow) |
-| `python3 serp_audit.py` | Fetch & parse SERPs, write JSON/XLSX/MD + competitor handoff |
-| `python3 run_pipeline.py` | Full pipeline (audit → validation → refresh) |
-| `python3 run_feasibility.py --json <file>` | Standalone DA feasibility analysis |
-| `python3 generate_content_brief.py --json <file> --list` | LLM content brief |
-| `python3 refresh_analysis_outputs.py --json <file> --xlsx <file>` | Re-classify without re-fetching |
-| `python3 export_history.py` | Export SQLite history to CSV |
-| `python3 visualize_volatility.py --keyword <kw>` | Plot rank volatility |
+- `config.yml` — operational settings. See `docs/config_reference.md` for
+  the full key list.
+- `domain_overrides.yml` — manual entity-type overrides
+  (e.g. `psychologytoday.com: directory`).
+- `intent_mapping.yml` — SERP intent rule table (spec v2). First-match-wins,
+  top of file = highest priority. Edit this file to refine intent rules; do
+  not push exceptions into Python.
+- `clinical_dictionary.json` — Bowen vs medical-model vocabulary tiers.
 
-## Architecture
+## Reference documentation
 
-```
-keywords.csv
-    └─► serp_audit.py (fetch + parse + enrich)
-            ├─► raw/{run_id}/                    raw JSON from SerpAPI
-            ├─► market_analysis_*.json           aggregated data
-            ├─► market_analysis_*.xlsx           Excel workbook
-            ├─► market_analysis_*.md             markdown summary
-            ├─► competitor_handoff_*.json        validated handoff for Tool 2 (Gap 3)
-            └─► serp_data.db                     SQLite history
+For details, read these as needed (do not preload):
 
-market_analysis_*.json
-    ├─► run_feasibility.py (DA gap analysis — standalone, runs any time)
-    │       ├─► dataforseo_client.py       domain rank lookup (primary)
-    │       ├─► moz_client.py             domain rank lookup (fallback)
-    │       ├─► feasibility.py            gap scoring + pivot suggestions
-    │       └─► feasibility_*.md          standalone feasibility report
-    │
-    └─► generate_content_brief.py (LLM via Anthropic)
-            ├─► content_opportunities_*.md
-            └─► advisory_briefing_*.md
-```
+- `docs/architecture.md` — module map and data flow diagram.
+- `docs/database.md` — SQLite schema and tables.
+- `docs/api_modes.md` — Low API / Balanced / Deep Research modes.
+- `docs/feasibility.md` — DA scoring thresholds and pivot logic.
+- `docs/spec_v2_fields.md` — pre-computed `serp_intent`, `title_patterns`,
+  `mixed_intent_strategy` fields and their validators.
+- `docs/gui_steps.md` — `serp-me.py` GUI step reference.
+- `docs/intent_classification.md` — PAA External Locus / Systemic / General
+  tagging.
+- `docs/config_reference.md` — `config.yml` keys.
 
-### Core Modules
-
-| Module | Role |
-|--------|------|
-| `serp_audit.py` | Main SERP engine — fetches, parses, enriches, tags PAA intent |
-| `generate_insight_report.py` | Renders `market_analysis_*.md` — Sections 1–6 including `## 5b. Per-Keyword SERP Intent` and Mixed-Intent Strategic Notes |
-| `generate_content_brief.py` | LLM report generator using Anthropic API; also renders per-recommendation briefs with `## 1a. SERP Intent Context` |
-| `run_feasibility.py` | Standalone DA feasibility analysis and pivot report |
-| `classifiers.py` | Rule-based content & entity type classifiers |
-| `intent_classifier.py` | Tags PAA questions as External Locus / Systemic / General |
-| `intent_verdict.py` | Spec v2 — computes per-keyword SERP intent verdict from intent_mapping.yml rules (primary_intent, is_mixed, confidence, distribution) |
-| `title_patterns.py` | Spec v2 — extracts shape patterns (how_to, what_is, listicle_numeric, vs_comparison, best_of, brand_only, question, other) from top-10 titles with dominance threshold |
-| `feasibility.py` | DA gap scoring (`compute_feasibility`) + pivot suggestions (`generate_hyper_local_pivot`) |
-| `dataforseo_client.py` | DataForSEO bulk_ranks API client with 30-day SQLite cache |
-| `moz_client.py` | Moz Links API v2 client with 30-day SQLite cache (fallback) |
-| `storage.py` | SQLite persistence layer |
-| `metrics.py` | Volatility & entity dominance calculations |
-| `url_enricher.py` | URL fetching & feature extraction |
-| `serp-me.py` | Tkinter GUI launcher |
-| `run_pipeline.py` | Pipeline orchestration |
-| `handoff_schema.json` | Spec v2 Gap 3 — draft-07 JSON Schema for `competitor_handoff_*.json`; `additionalProperties: false` enforces contract |
-| `test_validation_consistency.py` | Spec v2 Gap 5 — canary test scanning prompts for `keyword_profiles.<field>` references and asserting each has a validator rule |
-
-### Prompt Templates
-
-```
-prompts/
-├── main_report/system.md + user_template.md   → content_opportunities_*.md
-├── advisory/system.md + user_template.md      → advisory_briefing_*.md
-└── correction/user_template.md                → retry on validation failure
-```
-
-## Configuration
-
-**`config.yml`** — all operational settings:
-- `serpapi.*` — API params (engine, location, pagination, retries, modes)
-- `files.*` — input/output file paths (auto-updated by GUI after each run)
-- `enrichment.*` — URL enrichment settings
-- `app.*` — API mode flags (`balanced_mode`, `deep_research_mode`)
-- `moz.cache_ttl_days` — DA cache lifetime in days (default 30)
-- `feasibility.*` — DA gap thresholds, client DA, neighbourhoods, pivot settings
-- `audit_targets.n` — top-N organic URLs per keyword exported to competitor handoff (default 10)
-- `audit_targets.omit_from_audit` — domains excluded from the handoff (never sent to Tool 2)
-- `client.preferred_intents` — intents the client can produce content for; drives `mixed_intent_strategy`
-- `analysis_report.*` — client context injected into LLM prompts
-
-**`domain_overrides.yml`** — manual entity type overrides (e.g., `psychologytoday.com: directory`).
-
-**`intent_mapping.yml`** (spec v2) — rule table mapping `(content_type, entity_type, local_pack, domain_role)` → SERP intent (informational / commercial_investigation / transactional / navigational / local / uncategorised). First-match-wins, top of file = highest priority. Edit this file to refine intent assignments — don't push exceptions into Python.
-
-**`url_pattern_rules.yml`** — URL-path fallback rules for pages the HTML enricher couldn't classify. Edit to improve classification rates without touching Python.
-
-## Spec v2 Pre-Computed Fields (per keyword_profile)
-
-`generate_content_brief.py::extract_analysis_data_from_json()` populates these on every keyword profile so the LLM consumes deterministic verdicts instead of re-inferring them:
-
-- **`serp_intent`**: `{primary_intent, is_mixed, confidence (high/medium/low), intent_distribution, evidence}` — driven by `intent_mapping.yml`. Confidence falls when classifiers tag many URLs as N/A.
-- **`title_patterns`**: `{pattern_counts, dominant_pattern, examples, total_titles}` — `dominant_pattern` is set only when one pattern reaches ≥4 of 10 (and is never `"other"`).
-- **`mixed_intent_strategy`**: `compete_on_dominant` / `backdoor` / `avoid` / `null`. Computed only when `serp_intent.is_mixed = True`. Driven by `client.preferred_intents` in `config.yml` and the client's existing intent presence (intents the client already ranks for).
-
-`validate_llm_report` enforces these as HARD-FAIL (intent + is_mixed contradictions) or SOFT-FAIL with 1 retry (dominant_pattern + mixed_intent_strategy contradictions).
-
-## Feasibility Scoring
-
-Gap = avg competitor DA − client DA. Thresholds:
-
-| Gap | Status | Meaning |
-|-----|--------|---------|
-| ≤ 5 | ✅ High Feasibility | Rankable with content alone |
-| 6–15 | ⚠️ Moderate Feasibility | Requires local backlink building |
-| > 15 | 🔴 Low Feasibility | Dominated by high-authority sites — pivot to neighbourhood variant |
-
-**DA providers** (tried in order):
-1. **DataForSEO** (`DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD`) — `POST /v3/backlinks/bulk_ranks/live`, up to 1000 domains/call, pay-per-use
-2. **Moz** (`MOZ_TOKEN`) — `POST /v2/url_metrics`, up to 50 URLs/call, free tier 50 rows/month
-
-Both cache results in SQLite (`da_cache` and `moz_cache` tables) for 30 days. Re-running within the cache window costs nothing.
-
-**Pivot logic:** Low Feasibility keywords get a neighbourhood variant suggestion (e.g. "Couples Counselling" → "Couples Counselling Lonsdale"). If `feasibility.pivot_serp_fetch: true`, a secondary SerpAPI Maps call checks whether the client appears in the local 3-pack for the pivot keyword.
-
-## PAA Intent Classification
-
-`intent_classifier.py` tags every PAA question with:
-- **External Locus** — Medical model language (diagnosis, treatment, disorder, patient…)
-- **Systemic** — Bowen Theory language (differentiation, emotional cutoff, triangulation…)
-- **General** — Neither
-
-Tags written to `market_analysis_*.json` (`Intent_Tag`, `Intent_Confidence` fields). Systemic-tagged questions are passed to the LLM as `bowen_reframe_faqs` in the content brief payload.
-
-## API Modes
-
-| Mode | Google Pages | Maps Pages | AI Follow-up |
-|------|-------------|-----------|--------------|
-| Low API | 1 | 1 | No |
-| Balanced (default) | 3 | 1 | Defend/Strengthen only |
-| Deep Research | configurable | configurable | Yes (up to 5 calls) |
-
-Set via `config.yml` (`app.balanced_mode`, `app.deep_research_mode`) or env vars:
-```bash
-SERP_LOW_API_MODE=1
-SERP_BALANCED_MODE=1
-SERP_DEEP_RESEARCH_MODE=1
-```
-
-## Database
-
-SQLite at `serp_data.db`. Key tables:
-
-| Table | Contents |
-|-------|----------|
-| `runs` | Each audit run (run_id, date, params_hash) |
-| `serp_results` | All ranked results per keyword per run |
-| `url_features` | Enriched URL data including Moz DA/PA columns |
-| `domain_features` | Entity type per domain |
-| `autocomplete_suggestions` | Search autocomplete data |
-| `keyword_feasibility` | DA gap scores, feasibility status, pivot variants per run |
-| `da_cache` | DataForSEO domain rank cache (30-day TTL) |
-| `moz_cache` | Moz DA/PA cache (30-day TTL) |
-
-All schema changes use `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE … ADD COLUMN` wrapped in `try/except OperationalError` — migrations run automatically on first use.
-
-## GUI (serp-me.py) — Step Reference
-
-| Step | Script | When to run |
-|------|--------|-------------|
-| 1. Full Pipeline | `run_pipeline.py` | Fresh SERP fetch for a keyword set |
-| 2. Fetch SERPs Only | `serp_audit.py` | Fetch without pipeline validation |
-| 3. Content Brief | `generate_content_brief.py` | After a pipeline run |
-| 4. Refresh Outputs | `refresh_analysis_outputs.py` | Re-classify without re-fetching |
-| 5. Export History | `export_history.py` | Export DB to CSV |
-| 6. Domain Overrides | — | Review/approve entity type overrides |
-| 7. Feasibility Analysis | `run_feasibility.py` | DA scoring from existing JSON (cached — free to re-run) |
-
-## LLM Validation Strategy
+## LLM validation policy
 
 `generate_content_brief.py` validates LLM outputs before writing:
-1. Hard-fail (abort): AI Overview count mismatch vs. extracted data; `serp_intent.primary_intent` or `is_mixed` contradictions; `dominant_pattern` contradictions
-2. Soft-fail (1 retry): `serp_intent.confidence` upgrade (LLM claims higher confidence than computed); `mixed_intent_strategy` contradictions → appended as interpretation notes
-3. Failed validations written to `*.validation.md` for inspection
 
-See `docs/validator_rules_20260501.md` for the full field-by-field rule list with severity, detection location, and test pointers.
+- **HARD-fail (abort)**: AI Overview count mismatch versus extracted data;
+  `serp_intent.primary_intent` or `is_mixed` contradictions.
+- **SOFT-fail (1 retry)**: wording issues, `title_patterns.dominant_pattern`
+  contradictions, `mixed_intent_strategy` contradictions. Retry uses the
+  correction prompt.
+- Failed validations are written to `*.validation.md` for inspection.
 
-`test_validation_consistency.py` (spec v2 Gap 5) is a canary that scans the prompt files for `keyword_profiles.<field>` references and asserts each has a corresponding mention in `validate_llm_report`. Run it after adding new pre-computed fields to catch missed validators early.
+`test_validation_consistency.py` is a canary that scans the prompt files
+for `keyword_profiles.<field>` references and asserts each has a
+corresponding rule in `validate_llm_report`. Run it after adding any new
+pre-computed field to a keyword profile to catch missed validators early.
 
-## Workflow Convention
+## Spec traceability for this project
 
-**Push after each set of work.** When a logical chunk lands (new feature module + tests passing, validation rules + tests, doc updates), commit and push to GitHub before moving to the next chunk. This keeps the working tree close to `origin/main`, makes review-by-diff possible, and prevents large swept-together changes from sitting in the working copy. Only commit the files you intentionally changed for the current chunk — never `git add .` because the repo accumulates many untracked output/draft files that should stay local.
+This project uses spec IDs throughout. When working from a spec:
 
-## Development Notes
-
-- **Naming convention**: output files follow `market_analysis_{topic}_{YYYYMMDD_HHMM}.json` — the GUI updates `config.yml` with the latest paths after each run. Topic slug is derived from the keyword CSV filename (lowercase, spaces → underscores).
-- **Tkinter tests**: `test_serp_launcher.py` imports `serp-me.py` which requires tkinter. Tests are skipped automatically in headless environments.
-- **No pytest installed by default**: `pytest` is not in `requirements.txt`; install it in the venv for development.
-- **Client context**: `config.yml → analysis_report` section is injected verbatim into LLM prompts — keep it accurate and concise.
-- **Entity classification precedence**: `domain_overrides.yml` > TLD signals > known-directory list > domain keywords > page content.
-- **DA client priority**: DataForSEO is tried first if `DATAFORSEO_LOGIN` is set; Moz used as fallback if `MOZ_TOKEN` is set. If neither is available, feasibility scores are skipped (keywords marked "No DA Data").
-- **Token costs**: Main content brief runs ~$0.08–0.40 depending on model (Sonnet vs Opus). DA lookups: DataForSEO ~$0.002/domain, Moz free tier 50 rows/month. Cache all DA results for 30 days to minimise repeat costs.
+- The `serp_tools_upgrade_spec_v2.md` and follow-up fix specs live in
+  `docs/specs/`.
+- Code that implements a spec criterion includes a `Spec:` reference in
+  its docstring per the user-level workflow rules.
+- After any spec-driven change, regenerate `docs/spec_coverage.md` to
+  reflect current implementation status.
