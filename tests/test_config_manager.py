@@ -598,6 +598,85 @@ class TestConfigSettingsTabPhase5:
             assert section in data, f"Missing section: {section}"
 
 
+class TestTabInitializationOrder:
+    """Test that all tabs initialize their instance variables BEFORE calling super().__init__().
+
+    This prevents AttributeError when render_ui() is called during initialization.
+    """
+
+    def test_all_tab_classes_can_be_imported(self):
+        """All tab classes should import without error."""
+        # This test verifies that all tab classes are properly defined
+        from config_manager import (
+            DomainOverridesTab,
+            ClassificationRulesTab,
+            IntentMappingTab,
+            StrategicPatternsTab,
+            BriefPatternRoutingTab,
+            IntentClassifierTriggersTab,
+            ConfigSettingsTab,
+            UrlPatternRulesTab,
+        )
+        # If we got here, all imports succeeded
+        assert True
+
+    @pytest.mark.skipif(not TKINTER_AVAILABLE, reason="tkinter not available")
+    def test_domain_overrides_tab_initializes_without_error(self):
+        """DomainOverridesTab should initialize all attributes before render_ui()."""
+        root = tk.Tk()
+        try:
+            tab = DomainOverridesTab(root)
+            assert hasattr(tab, 'tree')
+            assert hasattr(tab, 'entity_type_var')
+            assert tab.tree is None
+            assert tab.entity_type_var is None
+            root.destroy()
+        except AttributeError as e:
+            root.destroy()
+            pytest.fail(f"DomainOverridesTab initialization failed with AttributeError: {e}")
+
+    @pytest.mark.skipif(not TKINTER_AVAILABLE, reason="tkinter not available")
+    def test_intent_mapping_tab_initializes_without_error(self):
+        """IntentMappingTab should initialize all attributes before render_ui()."""
+        root = tk.Tk()
+        try:
+            tab = IntentMappingTab(root)
+            assert hasattr(tab, 'tree')
+            assert tab.tree is None
+            root.destroy()
+        except AttributeError as e:
+            root.destroy()
+            pytest.fail(f"IntentMappingTab initialization failed with AttributeError: {e}")
+
+    @pytest.mark.skipif(not TKINTER_AVAILABLE, reason="tkinter not available")
+    def test_config_settings_tab_initializes_without_error(self):
+        """ConfigSettingsTab should initialize all attributes before render_ui()."""
+        root = tk.Tk()
+        try:
+            tab = ConfigSettingsTab(root)
+            assert hasattr(tab, 'section_widgets')
+            assert hasattr(tab, 'section_frames')
+            assert isinstance(tab.section_widgets, dict)
+            assert isinstance(tab.section_frames, dict)
+            root.destroy()
+        except AttributeError as e:
+            root.destroy()
+            pytest.fail(f"ConfigSettingsTab initialization failed with AttributeError: {e}")
+
+    @pytest.mark.skipif(not TKINTER_AVAILABLE, reason="tkinter not available")
+    def test_url_pattern_rules_tab_initializes_without_error(self):
+        """UrlPatternRulesTab should initialize all attributes before render_ui()."""
+        root = tk.Tk()
+        try:
+            tab = UrlPatternRulesTab(root)
+            assert hasattr(tab, 'tree')
+            assert tab.tree is None
+            root.destroy()
+        except AttributeError as e:
+            root.destroy()
+            pytest.fail(f"UrlPatternRulesTab initialization failed with AttributeError: {e}")
+
+
 class TestUrlPatternRulesTabPhase5:
     """Test UrlPatternRulesTab (url_pattern_rules.yml editing)."""
 

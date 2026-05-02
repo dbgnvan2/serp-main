@@ -234,9 +234,9 @@ class DomainOverridesTab(BaseConfigTab):
     """Tab for domain_overrides.yml with full CRUD operations."""
 
     def __init__(self, parent):
-        super().__init__(parent, "domain_overrides.yml", "yaml")
         self.tree = None
         self.entity_type_var = None
+        super().__init__(parent, "domain_overrides.yml", "yaml")
 
     def render_ui(self):
         """Render domain overrides editor with treeview and buttons."""
@@ -390,9 +390,9 @@ class ClassificationRulesTab(BaseConfigTab):
     """Tab for classification_rules.json with entity types and descriptions management."""
 
     def __init__(self, parent):
-        super().__init__(parent, "classification_rules.json", "json")
         self.entity_types_tree = None
         self.descriptions_tree = None
+        super().__init__(parent, "classification_rules.json", "json")
 
     def render_ui(self):
         """Render classification rules editor with two sections: entity types and descriptions."""
@@ -642,8 +642,8 @@ class IntentMappingTab(BaseConfigTab):
     """Tab for intent_mapping.yml with CRUD and reordering support."""
 
     def __init__(self, parent):
-        super().__init__(parent, "intent_mapping.yml", "yaml")
         self.tree = None
+        super().__init__(parent, "intent_mapping.yml", "yaml")
 
     def render_ui(self):
         """Render intent mapping editor with treeview and CRUD buttons."""
@@ -917,8 +917,8 @@ class StrategicPatternsTab(BaseConfigTab):
     """Tab for strategic_patterns.yml with pattern editing support."""
 
     def __init__(self, parent):
-        super().__init__(parent, "strategic_patterns.yml", "yaml")
         self.tree = None
+        super().__init__(parent, "strategic_patterns.yml", "yaml")
 
     def render_ui(self):
         """Render strategic patterns editor with treeview and CRUD buttons."""
@@ -1142,9 +1142,9 @@ class BriefPatternRoutingTab(BaseConfigTab):
     """Tab for brief_pattern_routing.yml with pattern routing management."""
 
     def __init__(self, parent):
-        super().__init__(parent, "brief_pattern_routing.yml", "yaml")
         self.tree = None
         self.intent_descriptions = {}
+        super().__init__(parent, "brief_pattern_routing.yml", "yaml")
 
     def render_ui(self):
         """Render brief pattern routing editor with patterns and intent descriptions."""
@@ -1395,11 +1395,11 @@ class IntentClassifierTriggersTab(BaseConfigTab):
     """Tab for intent_classifier_triggers.yml with medical and systemic trigger management."""
 
     def __init__(self, parent):
-        super().__init__(parent, "intent_classifier_triggers.yml", "yaml")
         self.medical_mw_text = None
         self.medical_sw_text = None
         self.systemic_mw_text = None
         self.systemic_sw_text = None
+        super().__init__(parent, "intent_classifier_triggers.yml", "yaml")
 
     def render_ui(self):
         """Render intent classifier triggers editor with two sections: medical and systemic."""
@@ -1507,9 +1507,9 @@ class ConfigSettingsTab(BaseConfigTab):
     """Tab for config.yml with nested section editing."""
 
     def __init__(self, parent):
-        super().__init__(parent, "config.yml", "yaml")
         self.section_widgets = {}  # Maps section_name -> dict of field_name -> widget
         self.section_frames = {}  # Maps section_name -> LabelFrame for collapsing
+        super().__init__(parent, "config.yml", "yaml")
 
     def render_ui(self):
         """Render config.yml editor with collapsible sections and type-aware widgets."""
@@ -1705,8 +1705,8 @@ class UrlPatternRulesTab(BaseConfigTab):
     """Tab for url_pattern_rules.yml with regex pattern editor."""
 
     def __init__(self, parent):
-        super().__init__(parent, "url_pattern_rules.yml", "yaml")
         self.tree = None
+        super().__init__(parent, "url_pattern_rules.yml", "yaml")
 
     def render_ui(self):
         """Render URL pattern rules editor with treeview and buttons."""

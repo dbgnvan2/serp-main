@@ -1,0 +1,42 @@
+{
+  "entity_types": [
+    "counselling",
+    "legal",
+    "directory",
+    "nonprofit",
+    "government",
+    "media",
+    "professional_association",
+    "education"
+  ],
+  "entity_type_descriptions": {
+    "counselling": "Direct counselling or therapy service providers.",
+    "legal": "Law firms, legal services, or legal information sources.",
+    "directory": "Practitioner directories and listing platforms.",
+    "nonprofit": "Nonprofit or charity organizations.",
+    "government": "Government sites and public-sector service sources.",
+    "media": "Editorial, social, video, book, or news/media platforms.",
+    "professional_association": "Associations, colleges, and regulatory bodies.",
+    "education": "Universities, colleges, and research institutions."
+  },
+  "content_patterns": {
+    "directory_url": ["/directory/", "/list/", "/find-", "/best-", "-near-me"],
+    "service_signals": ["book appointment", "schedule consultation", "our services", "pricing", "contact us"],
+    "guide_titles": ["how to", "guide", "what is"]
+  },
+  "entity_patterns": {
+    "directory_domains": [
+      "yelp.ca", "yellowpages.ca", "psychologytoday.com", "healthgrades.com",
+      "counsellingbc.com", "therapytribe.com", "theravive.com", "firstsession.com",
+      "luminohealth.sunlife.ca", "ratemds.com"
+    ],
+    "professional_association_domains": ["bcacc.ca"],
+    "media_domains": ["reddit.com", "youtube.com", "amazon.ca", "cbc.ca", "vancouversun.com", "canadianaffairs.news"],
+    "legal_terms": ["law", "legal", "lawyer", "lawyers", "attorney", "attorneys", "estate", "litigation"],
+    "counselling_terms": ["counselling", "counseling", "therapy", "therapist", "psychology", "psychotherapy", "mentalhealth", "wellness"],
+    "nonprofit_keywords": ["registered charity", "non-profit organization", "donate", "volunteer"],
+    "association_keywords": ["professional association", "regulatory body", "college of", "registered clinical counsellors association", "licensing body"],
+    "legal_keywords": ["lawyer", "law firm", "family law", "legal advice", "custody", "estate planning"],
+    "counselling_keywords": ["counselling", "counseling", "therapy", "psychotherapy", "book appointment", "registered clinical counsellor"]
+  }
+}

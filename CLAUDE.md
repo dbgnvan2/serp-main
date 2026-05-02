@@ -16,6 +16,11 @@ keyword feasibility via Domain Authority gap analysis.
   chunk.
 - **Push after each logical chunk** of work (feature module + tests,
   validation rule + tests, doc update). Don't accumulate sweeping diffs.
+- **Separate business logic tests from UI tests**: Business logic (data loading,
+  validation, structure) should NOT require GUI frameworks. Only skip tests that
+  actually need widget interaction. This prevents hidden bugs from going untested.
+  Example: Don't skip "test that validates loaded data" just because treeview
+  rendering isn't available — that test has nothing to do with the UI.
 
 ## Required env vars (in `.env`)
 
