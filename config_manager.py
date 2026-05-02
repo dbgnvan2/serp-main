@@ -83,12 +83,39 @@ HELP_BY_FILE = {
         "  Angle: 'Content on creating space vs. pursuing; individual regulation'"
     ),
     "brief_pattern_routing.yml": (
-        "Routes content briefs to specific patterns and keyword themes. Pattern names must exist "
-        "in strategic_patterns.yml. Edit this to customize which patterns appear in briefs."
+        "BRIEF PATTERN ROUTING: Maps strategic patterns to content attributes.\n\n"
+        "PURPOSE: Determines which Bowen patterns (from strategic_patterns.yml) to mention in briefs,\n"
+        "and which People Also Ask themes and keywords associate with each pattern.\n\n"
+        "STRUCTURE:\n"
+        "  • pattern_name: Must exactly match Pattern_Name from strategic_patterns.yml\n"
+        "  • paa_themes: Which People Also Ask question themes relate to this pattern\n"
+        "  • paa_categories: How PAA questions in those themes should be categorized\n"
+        "  • keyword_hints: Keywords suggesting this pattern is relevant to the search\n"
+        "  • intent_slot_descriptions: Context descriptions for content brief slots\n\n"
+        "EXAMPLE:\n"
+        "  pattern_name: 'pursuer_distancer'\n"
+        "  paa_themes: ['communication', 'relationships', 'marriage']\n"
+        "  paa_categories: ['patterns', 'conflict', 'connection']\n"
+        "  keyword_hints: ['pursue', 'withdraw', 'distance', 'chase']\n"
+        "  intent_slot_descriptions: { context: 'Pursue-distance relational pattern' }\n\n"
+        "EDIT WHEN: Adding new patterns or refining which PAA themes/keywords trigger each pattern."
     ),
     "intent_classifier_triggers.yml": (
-        "PAA External Locus and Systemic vocabulary lists. Used to classify PAA questions. "
-        "Add trigger words to improve classification accuracy."
+        "INTENT CLASSIFIER TRIGGERS: Vocabularies for classifying People Also Ask questions.\n\n"
+        "PURPOSE: Helps categorize PAA questions into Bowen vs. medical-model thinking patterns.\n"
+        "Questions with 'external locus' triggers indicate blaming/externalizing.\n"
+        "Questions with 'systemic' triggers indicate systems thinking.\n\n"
+        "STRUCTURE:\n"
+        "  medical_triggers:\n"
+        "    multi_word: Multi-word phrases (e.g., 'when should I')\n"
+        "    single_word: Single words (e.g., 'anxiety', 'depression')\n"
+        "  systemic_triggers:\n"
+        "    multi_word: Multi-word phrases (e.g., 'how can we', 'what patterns')\n"
+        "    single_word: Single words (e.g., 'differentiation', 'triangulation')\n\n"
+        "EXAMPLE:\n"
+        "  medical: ['anxiety', 'depression', 'should I medicate', 'coping strategies']\n"
+        "  systemic: ['patterns', 'pursue-distance', 'how can we', 'differentiation']\n\n"
+        "EDIT WHEN: Improving classification of PAA questions or adding new trigger vocabularies."
     ),
     "config.yml": (
         "Operational settings for SerpAPI, file paths, thresholds, and enrichment options. "
@@ -149,6 +176,29 @@ HELP_BY_FIELD = {
         "Force a specific entity type for this domain. Must be one of: "
         + ", ".join(sorted(VALID_ENTITY_TYPES))
     ),
+    # Config.yml field help
+    "config.yml.serpapi.engine": "Search engine to use. 'google' for web search, 'google_maps' for maps.",
+    "config.yml.serpapi.gl": "Geographic location code (e.g., 'ca' for Canada, 'us' for USA).",
+    "config.yml.serpapi.hl": "Language code (e.g., 'en' for English, 'fr' for French).",
+    "config.yml.serpapi.num": "Number of results per SERP page (max 100). Higher = slower but more comprehensive.",
+    "config.yml.serpapi.google_max_pages": "How many pages of Google results to fetch (max 3 for free tier).",
+    "config.yml.serpapi.google_max_results": "Total maximum Google results to collect (roughly pages × num).",
+    "config.yml.serpapi.retry_max_attempts": "How many times to retry failed API requests before giving up.",
+    "config.yml.serpapi.retry_backoff_seconds": "Delay (seconds) between retry attempts. Increases with each attempt.",
+    "config.yml.serpapi.no_cache": "Set to true to bypass SerpAPI cache and always fetch fresh results.",
+    "config.yml.files.input_csv": "CSV file with keywords to research (relative or absolute path).",
+    "config.yml.files.output_folder": "Where to save analysis results (xlsx, json, md files).",
+    "config.yml.enrichment.enabled": "Whether to fetch extra data (domain age, enrichment details). Slows down analysis but more complete.",
+    "config.yml.enrichment.max_urls_per_keyword": "How many URLs per keyword to analyze for enrichment (higher = more thorough).",
+    "config.yml.enrichment.timeout_seconds": "How long to wait for enrichment requests before timing out.",
+    "config.yml.app.force_local_intent": "Always label local pack results as 'local' intent (override classifier).",
+    "config.yml.app.balanced_mode": "Use balanced approach: medium thoroughness, medium speed.",
+    "config.yml.serp_intent.thresholds.primary_share": "Confidence threshold for primary intent (0.0-1.0). Higher = only certain results marked as primary.",
+    "config.yml.serp_intent.thresholds.confidence_high": "Threshold for marking intent as 'high confidence' (0.0-1.0).",
+    "config.yml.client.preferred_intents": "Only report on these intent types (leave empty for all). Example: ['informational', 'local']",
+    "config.yml.feasibility.client_da": "Your domain authority (estimated). Used to assess feasibility vs. competitors.",
+    "config.yml.feasibility.enabled": "Whether to calculate Domain Authority feasibility scores.",
+    "config.yml.feasibility.pivot_serp_fetch": "When feasibility is low, fetch more SERPs to find better opportunities.",
 }
 
 
@@ -1640,13 +1690,24 @@ class ConfigSettingsTab(BaseConfigTab):
         field_frame = ttk.Frame(parent)
         field_frame.pack(fill="x", pady=5)
 
-        # Label
+        # Label with help button
+        label_frame = ttk.Frame(field_frame)
+        label_frame.pack(side="left", padx=(0, 10))
+
         ttk.Label(
-            field_frame,
+            label_frame,
             text=f"{field_name}:",
             width=25,
             anchor="w"
-        ).pack(side="left", padx=(0, 10))
+        ).pack(side="left", padx=(0, 5))
+
+        # Add help button (?)
+        help_key = f"config.yml.{section_name}.{field_name}"
+        if help_key in HELP_BY_FIELD:
+            help_text = HELP_BY_FIELD[help_key]
+            def show_help(ht=help_text):
+                messagebox.showinfo(f"Help: {field_name}", ht)
+            ttk.Button(label_frame, text="?", width=2, command=show_help).pack(side="left")
 
         # Widget based on type
         widget = None
