@@ -9,22 +9,13 @@ keyword feasibility via Domain Authority gap analysis.
 
 - **Activate venv first**: `source venv/bin/activate` before any Python
   command. Tests and scripts will fail in confusing ways without it.
-- **Run tests with**: `python3 -m pytest test_*.py -q`
-  (expects 377 passing, 5 skipped, 0 errors).
+- **Run tests with**: `python3 -m pytest test_*.py tests/ -q`
+  (expects 407 passing, 5 skipped, 0 errors).
 - **Never `git add .`** — the repo accumulates output and draft files that
   must stay local. Only commit files intentionally changed for the current
   chunk.
 - **Push after each logical chunk** of work (feature module + tests,
   validation rule + tests, doc update). Don't accumulate sweeping diffs.
-- **Edit configuration, not Python.** Intent rules belong in
-  `intent_mapping.yml`, entity overrides in `domain_overrides.yml`, client
-  context in `config.yml`. Do not push exceptions or hardcoded values into
-  `.py` files.
-- **Externalise old content when adding new editorial knobs.** When adding a
-  new trigger list, classification rule, or mapping table, scan for similar
-  hardcoded content already in Python and externalise it in the same change.
-  Do not leave old hardcoded content in `.py` files while new content moves to
-  YAML — that produces a codebase where similar things live in different places.
 
 ## Required env vars (in `.env`)
 
@@ -55,6 +46,37 @@ underscores). The GUI auto-updates `config.yml` with the latest paths.
   not push exceptions into Python.
 - `clinical_dictionary.json` — Bowen vs medical-model vocabulary tiers.
 - `strategic_patterns.yml` — Bowen pattern definitions (triggers, reframes, content angles). Add patterns here; no Python required.
+
+## Editorial content lives in config files
+
+Trigger words, classification rules, mapping tables, vocabulary lists,
+brief routing rules, and any other content that requires editorial judgment
+to refine belongs in YAML or JSON, not in Python source.
+
+When adding a new editorial knob (a new trigger list, a new mapping table,
+a new routing rule), check whether similar editorial content already exists
+elsewhere in the codebase. If so, externalise the older content in the same
+change. Do not leave old hardcoded content in place while new content moves to
+YAML — this produces a codebase where similar things live in different places
+and reviewers can't find the editorial surface.
+
+Test for "is this editorial content?": if a non-developer reading the file
+might reasonably want to change a value (a trigger word, a category label,
+a routing rule), it's editorial. If only a developer would touch it (a
+class structure, a function signature, an algorithm), it's code.
+
+Editorial content currently lives in:
+- `intent_mapping.yml` — SERP intent rule table
+- `strategic_patterns.yml` — Bowen patterns (triggers, status quo, reframes)
+- `url_pattern_rules.yml` — URL pattern fallbacks for content classifier
+- `domain_overrides.yml` — manual entity-type overrides
+- `classification_rules.json` — content type and entity type pattern lists
+- `clinical_dictionary.json` — Bowen vs medical vocabulary tiers
+- `brief_pattern_routing.yml` — brief PAA / keyword / intent-slot routing (added I.1)
+- `intent_classifier_triggers.yml` — PAA External Locus / Systemic vocabularies (added I.2)
+- `config.yml` — operational settings
+
+When in doubt, ask the user before adding new editorial content to a `.py` file.
 
 ## Reference documentation
 
