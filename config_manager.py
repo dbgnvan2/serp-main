@@ -209,49 +209,411 @@ class BaseConfigTab(ttk.Frame):
 
 
 class DomainOverridesTab(BaseConfigTab):
-    """Tab for domain_overrides.yml."""
+    """Tab for domain_overrides.yml with full CRUD operations."""
 
     def __init__(self, parent):
         super().__init__(parent, "domain_overrides.yml", "yaml")
+        self.tree = None
+        self.entity_type_var = None
 
     def render_ui(self):
-        """Placeholder UI for Phase 1."""
+        """Render domain overrides editor with treeview and buttons."""
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
 
+        # Header
         ttk.Label(
             frame,
             text="Domain Overrides Configuration",
             font=("Helvetica", 12, "bold")
-        ).pack(anchor="w")
+        ).pack(anchor="w", pady=(0, 5))
 
         help_text = HELP_BY_FILE.get("domain_overrides.yml", "")
-        ttk.Label(frame, text=help_text, wraplength=600, justify="left").pack(anchor="w", pady=(5, 15))
+        ttk.Label(frame, text=help_text, wraplength=600, justify="left").pack(anchor="w", pady=(0, 10))
 
-        ttk.Label(frame, text="Phase 1: Placeholder", foreground="gray").pack(anchor="w")
+        # Treeview with columns
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        columns = ("domain", "entity_type")
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=12)
+        self.tree.heading("domain", text="Domain")
+        self.tree.heading("entity_type", text="Entity Type")
+        self.tree.column("domain", width=300)
+        self.tree.column("entity_type", width=200)
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Load data into treeview
+        self._load_treeview_data()
+
+        # Buttons
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Button(button_frame, text="+ Add", command=self._add_row).pack(side="left", padx=(0, 5))
+        ttk.Button(button_frame, text="Delete", command=self._delete_row).pack(side="left", padx=(0, 5))
+        ttk.Button(button_frame, text="Edit", command=self._edit_row).pack(side="left")
+
+    def _load_treeview_data(self):
+        """Populate treeview with current data from domain_overrides.yml."""
+        # Clear existing
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        # Load from current_data (dict of domain -> entity_type)
+        if isinstance(self.current_data, dict):
+            for domain, entity_type in sorted(self.current_data.items()):
+                self.tree.insert("", "end", values=(domain, entity_type))
+
+    def _add_row(self):
+        """Add a new domain override row."""
+        if not TKINTER_AVAILABLE:
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Add Domain Override")
+        dialog.geometry("400x150")
+        dialog.transient(self.master)
+
+        ttk.Label(dialog, text="Domain:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        domain_entry = ttk.Entry(dialog, width=30)
+        domain_entry.grid(row=0, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Entity Type:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+        entity_type_combo = ttk.Combobox(
+            dialog, values=sorted(VALID_ENTITY_TYPES), width=27
+        )
+        entity_type_combo.grid(row=1, column=1, padx=10, pady=10)
+
+        def save():
+            domain = domain_entry.get().strip()
+            entity_type = entity_type_combo.get().strip()
+
+            if not domain or not entity_type:
+                messagebox.showwarning("Incomplete", "Both domain and entity type required")
+                return
+
+            self.tree.insert("", "end", values=(domain, entity_type))
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Save", command=save).grid(row=2, column=1, padx=10, pady=10, sticky="e")
+
+    def _delete_row(self):
+        """Delete selected row."""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a domain to delete")
+            return
+
+        for item in selected:
+            self.tree.delete(item)
+
+    def _edit_row(self):
+        """Edit selected row."""
+        if not TKINTER_AVAILABLE:
+            return
+
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a domain to edit")
+            return
+
+        item = selected[0]
+        domain, entity_type = self.tree.item(item)["values"]
+
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Edit: {domain}")
+        dialog.geometry("400x150")
+        dialog.transient(self.master)
+
+        ttk.Label(dialog, text="Domain:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        domain_entry = ttk.Entry(dialog, width=30)
+        domain_entry.insert(0, domain)
+        domain_entry.grid(row=0, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Entity Type:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+        entity_type_combo = ttk.Combobox(
+            dialog, values=sorted(VALID_ENTITY_TYPES), width=27
+        )
+        entity_type_combo.set(entity_type)
+        entity_type_combo.grid(row=1, column=1, padx=10, pady=10)
+
+        def save():
+            new_domain = domain_entry.get().strip()
+            new_entity_type = entity_type_combo.get().strip()
+
+            if not new_domain or not new_entity_type:
+                messagebox.showwarning("Incomplete", "Both domain and entity type required")
+                return
+
+            self.tree.item(item, values=(new_domain, new_entity_type))
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Save", command=save).grid(row=2, column=1, padx=10, pady=10, sticky="e")
+
+    def get_edited_data(self):
+        """Extract treeview data back into dict format."""
+        data = {}
+        for item in self.tree.get_children():
+            domain, entity_type = self.tree.item(item)["values"]
+            data[domain] = entity_type
+        return data
 
 
 class ClassificationRulesTab(BaseConfigTab):
-    """Tab for classification_rules.json."""
+    """Tab for classification_rules.json with entity types and descriptions management."""
 
     def __init__(self, parent):
         super().__init__(parent, "classification_rules.json", "json")
+        self.entity_types_tree = None
+        self.descriptions_tree = None
 
     def render_ui(self):
-        """Placeholder UI for Phase 1."""
-        frame = ttk.Frame(self)
-        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        """Render classification rules editor with two sections: entity types and descriptions."""
+        main_frame = ttk.Frame(self)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
+        # Header
         ttk.Label(
-            frame,
+            main_frame,
             text="Classification Rules Configuration",
             font=("Helvetica", 12, "bold")
-        ).pack(anchor="w")
+        ).pack(anchor="w", pady=(0, 5))
 
         help_text = HELP_BY_FILE.get("classification_rules.json", "")
-        ttk.Label(frame, text=help_text, wraplength=600, justify="left").pack(anchor="w", pady=(5, 15))
+        ttk.Label(main_frame, text=help_text, wraplength=600, justify="left").pack(anchor="w", pady=(0, 15))
 
-        ttk.Label(frame, text="Phase 1: Placeholder", foreground="gray").pack(anchor="w")
+        # Section 1: Entity Types
+        entity_frame = ttk.LabelFrame(main_frame, text="Valid Entity Types", padding=10)
+        entity_frame.pack(fill="both", expand=True, pady=(0, 15))
+
+        ttk.Label(entity_frame, text="List of valid entity type values:", foreground="gray").pack(anchor="w", pady=(0, 5))
+
+        tree_frame = ttk.Frame(entity_frame)
+        tree_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        self.entity_types_tree = ttk.Treeview(tree_frame, columns=("type",), show="headings", height=6)
+        self.entity_types_tree.heading("type", text="Entity Type")
+        self.entity_types_tree.column("type", width=300)
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.entity_types_tree.yview)
+        self.entity_types_tree.configure(yscroll=scrollbar.set)
+        self.entity_types_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Load entity types
+        self._load_entity_types()
+
+        # Entity types buttons
+        entity_btn_frame = ttk.Frame(entity_frame)
+        entity_btn_frame.pack(fill="x")
+
+        ttk.Button(entity_btn_frame, text="+ Add Type", command=self._add_entity_type).pack(side="left", padx=(0, 5))
+        ttk.Button(entity_btn_frame, text="Delete Type", command=self._delete_entity_type).pack(side="left")
+
+        # Section 2: Entity Type Descriptions
+        desc_frame = ttk.LabelFrame(main_frame, text="Entity Type Descriptions", padding=10)
+        desc_frame.pack(fill="both", expand=True)
+
+        ttk.Label(desc_frame, text="Descriptions for each entity type:", foreground="gray").pack(anchor="w", pady=(0, 5))
+
+        tree_frame2 = ttk.Frame(desc_frame)
+        tree_frame2.pack(fill="both", expand=True, pady=(0, 10))
+
+        self.descriptions_tree = ttk.Treeview(tree_frame2, columns=("type", "description"), show="headings", height=6)
+        self.descriptions_tree.heading("type", text="Entity Type")
+        self.descriptions_tree.heading("description", text="Description")
+        self.descriptions_tree.column("type", width=200)
+        self.descriptions_tree.column("description", width=400)
+
+        scrollbar2 = ttk.Scrollbar(tree_frame2, orient="vertical", command=self.descriptions_tree.yview)
+        self.descriptions_tree.configure(yscroll=scrollbar2.set)
+        self.descriptions_tree.pack(side="left", fill="both", expand=True)
+        scrollbar2.pack(side="right", fill="y")
+
+        # Load descriptions
+        self._load_descriptions()
+
+        # Description buttons
+        desc_btn_frame = ttk.Frame(desc_frame)
+        desc_btn_frame.pack(fill="x")
+
+        ttk.Button(desc_btn_frame, text="+ Add", command=self._add_description).pack(side="left", padx=(0, 5))
+        ttk.Button(desc_btn_frame, text="Edit", command=self._edit_description).pack(side="left", padx=(0, 5))
+        ttk.Button(desc_btn_frame, text="Delete", command=self._delete_description).pack(side="left")
+
+    def _load_entity_types(self):
+        """Populate entity types treeview with current data."""
+        # Clear existing
+        for item in self.entity_types_tree.get_children():
+            self.entity_types_tree.delete(item)
+
+        # Load from current_data
+        if isinstance(self.current_data, dict) and "entity_types" in self.current_data:
+            for entity_type in sorted(self.current_data["entity_types"]):
+                self.entity_types_tree.insert("", "end", values=(entity_type,))
+
+    def _load_descriptions(self):
+        """Populate descriptions treeview with current data."""
+        # Clear existing
+        for item in self.descriptions_tree.get_children():
+            self.descriptions_tree.delete(item)
+
+        # Load from current_data
+        if isinstance(self.current_data, dict) and "entity_type_descriptions" in self.current_data:
+            descriptions = self.current_data["entity_type_descriptions"]
+            for entity_type in sorted(descriptions.keys()):
+                description = descriptions[entity_type]
+                self.descriptions_tree.insert("", "end", values=(entity_type, description))
+
+    def _add_entity_type(self):
+        """Add a new entity type."""
+        if not TKINTER_AVAILABLE:
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Add Entity Type")
+        dialog.geometry("350x120")
+        dialog.transient(self.master)
+
+        ttk.Label(dialog, text="Entity Type:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        type_entry = ttk.Entry(dialog, width=25)
+        type_entry.grid(row=0, column=1, padx=10, pady=10)
+
+        def save():
+            entity_type = type_entry.get().strip()
+
+            if not entity_type:
+                messagebox.showwarning("Incomplete", "Entity type name required")
+                return
+
+            self.entity_types_tree.insert("", "end", values=(entity_type,))
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Save", command=save).grid(row=1, column=1, padx=10, pady=10, sticky="e")
+
+    def _delete_entity_type(self):
+        """Delete selected entity type."""
+        selected = self.entity_types_tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select an entity type to delete")
+            return
+
+        for item in selected:
+            self.entity_types_tree.delete(item)
+
+    def _add_description(self):
+        """Add a new entity type description."""
+        if not TKINTER_AVAILABLE:
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Add Description")
+        dialog.geometry("450x180")
+        dialog.transient(self.master)
+
+        ttk.Label(dialog, text="Entity Type:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        type_combo = ttk.Combobox(dialog, width=25)
+        type_combo.grid(row=0, column=1, padx=10, pady=10)
+
+        # Populate with current entity types
+        entity_types = [self.entity_types_tree.item(i)["values"][0] for i in self.entity_types_tree.get_children()]
+        type_combo["values"] = sorted(entity_types)
+
+        ttk.Label(dialog, text="Description:").grid(row=1, column=0, padx=10, pady=10, sticky="nw")
+        desc_text = Text(dialog, width=30, height=4)
+        desc_text.grid(row=1, column=1, padx=10, pady=10)
+
+        def save():
+            entity_type = type_combo.get().strip()
+            description = desc_text.get("1.0", "end").strip()
+
+            if not entity_type or not description:
+                messagebox.showwarning("Incomplete", "Both entity type and description required")
+                return
+
+            self.descriptions_tree.insert("", "end", values=(entity_type, description))
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Save", command=save).grid(row=2, column=1, padx=10, pady=10, sticky="e")
+
+    def _edit_description(self):
+        """Edit selected description."""
+        if not TKINTER_AVAILABLE:
+            return
+
+        selected = self.descriptions_tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a description to edit")
+            return
+
+        item = selected[0]
+        entity_type, description = self.descriptions_tree.item(item)["values"]
+
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Edit: {entity_type}")
+        dialog.geometry("450x180")
+        dialog.transient(self.master)
+
+        ttk.Label(dialog, text="Entity Type:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        type_combo = ttk.Combobox(dialog, width=25)
+        type_combo.grid(row=0, column=1, padx=10, pady=10)
+
+        # Populate with current entity types
+        entity_types = [self.entity_types_tree.item(i)["values"][0] for i in self.entity_types_tree.get_children()]
+        type_combo["values"] = sorted(entity_types)
+        type_combo.set(entity_type)
+
+        ttk.Label(dialog, text="Description:").grid(row=1, column=0, padx=10, pady=10, sticky="nw")
+        desc_text = Text(dialog, width=30, height=4)
+        desc_text.insert("1.0", description)
+        desc_text.grid(row=1, column=1, padx=10, pady=10)
+
+        def save():
+            new_entity_type = type_combo.get().strip()
+            new_description = desc_text.get("1.0", "end").strip()
+
+            if not new_entity_type or not new_description:
+                messagebox.showwarning("Incomplete", "Both entity type and description required")
+                return
+
+            self.descriptions_tree.item(item, values=(new_entity_type, new_description))
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Save", command=save).grid(row=2, column=1, padx=10, pady=10, sticky="e")
+
+    def _delete_description(self):
+        """Delete selected description."""
+        selected = self.descriptions_tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a description to delete")
+            return
+
+        for item in selected:
+            self.descriptions_tree.delete(item)
+
+    def get_edited_data(self):
+        """Extract treeview data back into dict format matching classification_rules.json schema."""
+        data = self.current_data.copy() if isinstance(self.current_data, dict) else {}
+
+        # Extract entity types
+        entity_types = []
+        for item in self.entity_types_tree.get_children():
+            entity_types.append(self.entity_types_tree.item(item)["values"][0])
+        data["entity_types"] = sorted(entity_types)
+
+        # Extract descriptions
+        descriptions = {}
+        for item in self.descriptions_tree.get_children():
+            entity_type, description = self.descriptions_tree.item(item)["values"]
+            descriptions[entity_type] = description
+        data["entity_type_descriptions"] = descriptions
+
+        return data
 
 
 class IntentMappingTab(BaseConfigTab):

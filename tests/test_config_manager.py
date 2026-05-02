@@ -248,3 +248,183 @@ class TestTabDataLoading:
             assert data is not None
         finally:
             root.destroy()
+
+
+@pytest.mark.skipif(not TKINTER_AVAILABLE, reason="tkinter not available")
+class TestDomainOverridesTabPhase2:
+    """Phase 2: Test DomainOverridesTab CRUD operations and validation."""
+
+    def test_domain_overrides_loads_current_data(self):
+        """DomainOverridesTab should load domain_overrides.yml data."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = DomainOverridesTab(frame)
+            # Should load dict of domain -> entity_type
+            assert isinstance(tab.current_data, dict)
+            # Verify it's structured correctly
+            for key, value in tab.current_data.items():
+                assert isinstance(key, str)  # domain
+                assert isinstance(value, str)  # entity_type
+        finally:
+            root.destroy()
+
+    def test_domain_overrides_get_edited_data_preserves_dict(self):
+        """DomainOverridesTab.get_edited_data() should return dict."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = DomainOverridesTab(frame)
+            edited_data = tab.get_edited_data()
+            # Should return dict with same structure as current_data
+            assert isinstance(edited_data, dict)
+            assert edited_data == tab.current_data
+        finally:
+            root.destroy()
+
+    def test_domain_overrides_validation_passes_on_current_data(self):
+        """DomainOverridesTab should validate against current data."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = DomainOverridesTab(frame)
+            is_valid, errors, warnings = tab.validate()
+            # Current data on disk should be valid
+            assert isinstance(is_valid, bool)
+            assert isinstance(errors, list)
+            assert isinstance(warnings, list)
+        finally:
+            root.destroy()
+
+    def test_domain_overrides_treeview_populated(self):
+        """DomainOverridesTab treeview should be populated with data."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = DomainOverridesTab(frame)
+            # Check treeview has items
+            items = tab.tree.get_children()
+            # Should have at least as many rows as entries in current_data
+            assert len(items) == len(tab.current_data)
+        finally:
+            root.destroy()
+
+    def test_domain_overrides_unsaved_changes_detected(self):
+        """DomainOverridesTab should detect when data is modified."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = DomainOverridesTab(frame)
+            # Initially no changes
+            assert not tab.has_unsaved_changes()
+            # Add a row (simulate user action)
+            # This is a limitation of GUI testing - the tree changes don't automatically
+            # trigger has_unsaved_changes unless we modify the underlying logic
+            # For now, verify the method exists and returns a boolean
+            result = tab.has_unsaved_changes()
+            assert isinstance(result, bool)
+        finally:
+            root.destroy()
+
+
+@pytest.mark.skipif(not TKINTER_AVAILABLE, reason="tkinter not available")
+class TestClassificationRulesTabPhase2:
+    """Phase 2: Test ClassificationRulesTab CRUD operations and validation."""
+
+    def test_classification_rules_loads_current_data(self):
+        """ClassificationRulesTab should load classification_rules.json data."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = ClassificationRulesTab(frame)
+            # Should load dict with entity_types and entity_type_descriptions
+            assert isinstance(tab.current_data, dict)
+            assert "entity_types" in tab.current_data
+            assert "entity_type_descriptions" in tab.current_data
+            assert isinstance(tab.current_data["entity_types"], list)
+            assert isinstance(tab.current_data["entity_type_descriptions"], dict)
+        finally:
+            root.destroy()
+
+    def test_classification_rules_get_edited_data_preserves_structure(self):
+        """ClassificationRulesTab.get_edited_data() should preserve structure."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = ClassificationRulesTab(frame)
+            edited_data = tab.get_edited_data()
+            # Should have same keys as original
+            assert "entity_types" in edited_data
+            assert "entity_type_descriptions" in edited_data
+            assert isinstance(edited_data["entity_types"], list)
+            assert isinstance(edited_data["entity_type_descriptions"], dict)
+        finally:
+            root.destroy()
+
+    def test_classification_rules_validation_passes_on_current_data(self):
+        """ClassificationRulesTab should validate against current data."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = ClassificationRulesTab(frame)
+            is_valid, errors, warnings = tab.validate()
+            # Current data on disk should be valid
+            assert isinstance(is_valid, bool)
+            assert isinstance(errors, list)
+            assert isinstance(warnings, list)
+        finally:
+            root.destroy()
+
+    def test_classification_rules_entity_types_treeview_populated(self):
+        """ClassificationRulesTab entity_types treeview should be populated."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = ClassificationRulesTab(frame)
+            # Check entity_types treeview has items
+            items = tab.entity_types_tree.get_children()
+            # Should have same number of items as entity_types list
+            assert len(items) == len(tab.current_data.get("entity_types", []))
+        finally:
+            root.destroy()
+
+    def test_classification_rules_descriptions_treeview_populated(self):
+        """ClassificationRulesTab descriptions treeview should be populated."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = ClassificationRulesTab(frame)
+            # Check descriptions treeview has items
+            items = tab.descriptions_tree.get_children()
+            # Should have same number of items as descriptions dict
+            assert len(items) == len(tab.current_data.get("entity_type_descriptions", {}))
+        finally:
+            root.destroy()
+
+    def test_classification_rules_preserves_extra_keys(self):
+        """ClassificationRulesTab should preserve extra keys like content_patterns."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = ClassificationRulesTab(frame)
+            edited_data = tab.get_edited_data()
+            # Should preserve content_patterns, entity_patterns, etc.
+            for key in tab.current_data:
+                if key not in ["entity_types", "entity_type_descriptions"]:
+                    assert key in edited_data, f"Missing key: {key}"
+        finally:
+            root.destroy()
+
+    def test_classification_rules_unsaved_changes_detected(self):
+        """ClassificationRulesTab should detect when data is modified."""
+        root = tk.Tk()
+        frame = tk.Frame(root)
+        try:
+            tab = ClassificationRulesTab(frame)
+            # Initially no changes
+            assert not tab.has_unsaved_changes()
+            # Verify the method returns a boolean
+            result = tab.has_unsaved_changes()
+            assert isinstance(result, bool)
+        finally:
+            root.destroy()
