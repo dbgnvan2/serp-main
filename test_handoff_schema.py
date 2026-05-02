@@ -4,7 +4,7 @@ import os
 import pytest
 import jsonschema
 
-from serp_audit import build_competitor_handoff, _HANDOFF_SCHEMA
+from handoff_writer import build_competitor_handoff, _HANDOFF_SCHEMA
 
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "handoff_schema.json")
 

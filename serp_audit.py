@@ -12,6 +12,8 @@ import hashlib
 import jsonschema
 import generate_insight_report
 import generate_content_brief
+import pattern_matching
+import handoff_writer
 import yaml
 import metrics
 from urllib.parse import urlparse
@@ -157,6 +159,7 @@ STOP_WORDS = set(SHARED_CONFIG.get("stop_words", [
     "counsellor", "counselor", "service", "services", "clinic", "centre", "center", "help", "support",
     "highlytrained"
 ]))
+pattern_matching.STOP_WORDS = STOP_WORDS  # sync config-driven stop words
 
 # Load Omitted Domains from external file (Single Source of Truth)
 OMITTED_DOMAINS = set()
@@ -1086,158 +1089,18 @@ def parse_data(keyword, results, query_metadata):
     return metrics, organic_list, paa_list, expansion_list, competitor_list, all_local_pack, ai_citations, serp_modules, rich_features, parsing_warnings
 
 
-def get_ngrams(text, n):
-    if not isinstance(text, str):
-        return []
-    # Clean: lowercase, replace non-alphanumeric with space (prevents "highly-trained" -> "highlytrained")
-    text = re.sub(r'[^\w\s]', ' ', text.lower())
-    words = [w for w in text.split() if w not in STOP_WORDS and len(w) > 2]
-    return [" ".join(words[i:i+n]) for i in range(len(words)-n+1)]
-
-
-def count_syllables(word):
-    word = word.lower()
-    count = 0
-    vowels = "aeiouy"
-    if len(word) == 0:
-        return 0
-    if word[0] in vowels:
-        count += 1
-    for index in range(1, len(word)):
-        if word[index] in vowels and word[index - 1] not in vowels:
-            count += 1
-    if word.endswith("e"):
-        count -= 1
-    if count == 0:
-        count += 1
-    return count
-
-
-def calculate_reading_level(text):
-    if not text or not isinstance(text, str) or text == "N/A":
-        return "N/A"
-    # Basic cleaning and tokenization
-    clean_text = re.sub(r'[^\w\s.?!]', '', text)
-    sentences = [s for s in re.split(r'[.?!]+', clean_text) if s.strip()]
-    words = clean_text.split()
-    if not sentences or not words:
-        return "N/A"
-    num_syllables = sum(count_syllables(w) for w in words)
-    # Flesch-Kincaid Grade Level Formula
-    score = 0.39 * (len(words) / len(sentences)) + 11.8 * \
-        (num_syllables / len(words)) - 15.59
-    return round(score, 1)
-
-
-def calculate_sentiment(text):
-    if not TEXTBLOB_AVAILABLE or not text or not isinstance(text, str) or text == "N/A":
-        return "N/A"
-    try:
-        # Returns a float between -1.0 (Negative) and 1.0 (Positive)
-        return round(TextBlob(text).sentiment.polarity, 2)
-    except Exception:
-        return "N/A"
-
-
-def calculate_subjectivity(text):
-    if not TEXTBLOB_AVAILABLE or not text or not isinstance(text, str) or text == "N/A":
-        return "N/A"
-    try:
-        # Returns a float between 0.0 (Objective) and 1.0 (Subjective)
-        return round(TextBlob(text).sentiment.subjectivity, 2)
-    except Exception:
-        return "N/A"
-
-
-def _dataset_topic_profile(keywords):
-    text = " ".join((keywords or [])).lower()
-    return {
-        "estrangement_family": any(term in text for term in [
-            "estrangement", "adult children", "family cutoff", "reunification"
-        ]),
-        "marriage_couples": any(term in text for term in [
-            "marriage", "couples", "partner", "relationship"
-        ]),
-    }
-
-
-_STRATEGIC_PATTERNS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strategic_patterns.yml")
-
-
-_PATTERN_REQUIRED_FIELDS = {"Pattern_Name", "Triggers", "Status_Quo_Message", "Bowen_Bridge_Reframe", "Content_Angle"}
-
-
-def _validate_strategic_patterns(patterns, source="strategic_patterns.yml"):
-    """Raise ValueError if any pattern entry is malformed.
-
-    Checked at load time so bad config fails loudly rather than silently
-    producing wrong output or missing patterns at runtime.
-    """
-    if not isinstance(patterns, list) or not patterns:
-        raise ValueError(f"{source}: must be a non-empty list of pattern entries")
-    seen_names = set()
-    for i, p in enumerate(patterns):
-        label = f"{source} entry {i + 1}"
-        missing = _PATTERN_REQUIRED_FIELDS - set(p.keys())
-        if missing:
-            raise ValueError(f"{label}: missing required fields: {sorted(missing)}")
-        name = (p.get("Pattern_Name") or "").strip()
-        if not name:
-            raise ValueError(f"{label}: Pattern_Name must not be empty")
-        if name in seen_names:
-            raise ValueError(f"{source}: duplicate Pattern_Name '{name}'")
-        seen_names.add(name)
-        triggers = p.get("Triggers")
-        if not isinstance(triggers, list) or not triggers:
-            raise ValueError(f"{label} ({name!r}): Triggers must be a non-empty list")
-        for t in triggers:
-            if not isinstance(t, str) or not t.strip():
-                raise ValueError(f"{label} ({name!r}): each trigger must be a non-empty string")
-            if len(t.strip()) < 4:
-                raise ValueError(
-                    f"{label} ({name!r}): trigger {t!r} is too short (minimum 4 characters); "
-                    "short triggers match too broadly even with word boundaries"
-                )
-
-
-def _load_strategic_patterns(path=None):
-    """Load and validate Bowen pattern definitions from strategic_patterns.yml."""
-    fpath = path or _STRATEGIC_PATTERNS_PATH
-    with open(fpath, encoding="utf-8") as f:
-        patterns = yaml.safe_load(f) or []
-    _validate_strategic_patterns(patterns, source=os.path.basename(fpath))
-    return patterns
-
-
-def analyze_strategic_opportunities(ngram_results, keywords=None, patterns_path=None):
-    """
-    Maps detected N-Gram patterns to Bowen Theory strategic recommendations.
-    Returns a list of dictionaries for the 'Strategic_Recommendations' sheet.
-    Patterns are loaded from strategic_patterns.yml; add new patterns there.
-    """
-    strategies = _load_strategic_patterns(patterns_path)
-    all_phrases = " ".join([item["Phrase"] for item in ngram_results]).lower()
-
-    recommendations = []
-    for strategy in strategies:
-        found_triggers = [t for t in strategy["Triggers"]
-                         if re.search(r'\b' + re.escape(t) + r'\b', all_phrases)]
-        if found_triggers:
-            rec = strategy.copy()
-            rec["Detected_Triggers"] = ", ".join(found_triggers[:5])
-            recommendations.append(rec)
-
-    if not recommendations:
-        recommendations.append({
-            "Pattern_Name": "General Differentiation",
-            "Detected_Triggers": "N/A",
-            "Status_Quo_Message": "Standard symptom-focused advice.",
-            "Bowen_Bridge_Reframe": "Focus on defining a self within the system.",
-            "Content_Angle": "How to be yourself in your important relationships."
-        })
-
-    return recommendations
-
+# Pattern matching functions relocated to pattern_matching.py (I.6)
+get_ngrams = pattern_matching.get_ngrams
+count_syllables = pattern_matching.count_syllables
+calculate_reading_level = pattern_matching.calculate_reading_level
+calculate_sentiment = pattern_matching.calculate_sentiment
+calculate_subjectivity = pattern_matching.calculate_subjectivity
+_dataset_topic_profile = pattern_matching._dataset_topic_profile
+_STRATEGIC_PATTERNS_PATH = pattern_matching._STRATEGIC_PATTERNS_PATH
+_PATTERN_REQUIRED_FIELDS = pattern_matching._PATTERN_REQUIRED_FIELDS
+_validate_strategic_patterns = pattern_matching._validate_strategic_patterns
+_load_strategic_patterns = pattern_matching._load_strategic_patterns
+analyze_strategic_opportunities = pattern_matching.analyze_strategic_opportunities
 
 def _autocomplete_query_variants(keyword):
     """Build fallback autocomplete queries for long/local phrases."""
@@ -1424,145 +1287,10 @@ def fetch_autocomplete(keyword):
     return out
 
 
-_HANDOFF_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "handoff_schema.json")
-_HANDOFF_SCHEMA = None
-if os.path.exists(_HANDOFF_SCHEMA_PATH):
-    with open(_HANDOFF_SCHEMA_PATH) as _f:
-        _HANDOFF_SCHEMA = json.load(_f)
-
-
-def build_competitor_handoff(
-    all_organic,
-    run_id,
-    run_timestamp,
-    client_domain,
-    client_brand_names,
-    n=10,
-    omit_from_audit=None,
-):
-    """Build the validated handoff dict for Tool 2 from organic results.
-
-    Selects the top *n* organic URLs per keyword, excluding the client's own
-    domain and any domain in *omit_from_audit*.  Returns the handoff dict; the
-    caller is responsible for writing it.
-
-    Returns None if:
-    - all_organic is empty or None (no SERP data was collected — nothing to hand off)
-    - schema validation fails (schema violation logged)
-    """
-    if not all_organic:
-        logging.info("No organic results — competitor handoff not produced.")
-        return None
-    omit_set = {d.lower() for d in (omit_from_audit or [])}
-    client_domain_lower = (client_domain or "").lower()
-
-    # Build per-keyword top-N lists; simultaneously track primary keyword per URL.
-    # primary_keyword_for_url = keyword where this URL appears at its lowest rank.
-    url_best_rank: dict[str, tuple[int, str]] = {}  # url -> (rank, keyword)
-
-    # First pass: find best (lowest) rank per URL across all keywords
-    for item in all_organic:
-        url = item.get("Link") or item.get("url", "")
-        if not url or url == "N/A":
-            continue
-        try:
-            rank = int(item.get("Rank", 9999))
-        except (TypeError, ValueError):
-            rank = 9999
-        keyword = item.get("Root_Keyword") or item.get("Keyword", "")
-        prev = url_best_rank.get(url)
-        if prev is None or rank < prev[0]:
-            url_best_rank[url] = (rank, keyword)
-
-    # Second pass: build per-keyword top-N candidate sets, applying exclusions
-    seen_urls: set[str] = set()
-    targets: list[dict] = []
-    client_excluded = 0
-    omit_excluded = 0
-    omit_domains_hit: set[str] = set()
-
-    # Group by keyword, preserving rank order
-    from collections import defaultdict
-    by_keyword: dict[str, list] = defaultdict(list)
-    for item in all_organic:
-        url = item.get("Link") or item.get("url", "")
-        if not url or url == "N/A":
-            continue
-        kw = item.get("Root_Keyword") or item.get("Keyword", "")
-        by_keyword[kw].append(item)
-
-    for kw, items in by_keyword.items():
-        # Sort by rank ascending
-        def _rank(i):
-            try:
-                return int(i.get("Rank", 9999))
-            except (TypeError, ValueError):
-                return 9999
-
-        sorted_items = sorted(items, key=_rank)
-        added = 0
-        for item in sorted_items:
-            if added >= n:
-                break
-            url = item.get("Link") or item.get("url", "")
-            if not url or url == "N/A":
-                continue
-            domain = urlparse(url).netloc.lower()
-
-            if domain == client_domain_lower or client_domain_lower in domain:
-                client_excluded += 1
-                continue
-            if domain in omit_set:
-                omit_excluded += 1
-                omit_domains_hit.add(domain)
-                continue
-
-            if url in seen_urls:
-                added += 1
-                continue
-            seen_urls.add(url)
-
-            try:
-                rank_int = int(item.get("Rank", 0))
-            except (TypeError, ValueError):
-                rank_int = 0
-
-            primary_kw = url_best_rank.get(url, (0, kw))[1]
-
-            targets.append({
-                "url": url,
-                "domain": domain,
-                "rank": rank_int,
-                "entity_type": item.get("Entity_Type") or "N/A",
-                "content_type": item.get("Content_Type") or "N/A",
-                "title": item.get("Title") or "",
-                "source_keyword": kw,
-                "primary_keyword_for_url": primary_kw,
-            })
-            added += 1
-
-    handoff = {
-        "schema_version": "1.0",
-        "source_run_id": run_id,
-        "source_run_timestamp": run_timestamp,
-        "client_domain": client_domain or "",
-        "client_brand_names": client_brand_names or [],
-        "targets": targets,
-        "exclusions": {
-            "client_urls_excluded": client_excluded,
-            "omit_list_excluded": omit_excluded,
-            "omit_list_used": sorted(omit_domains_hit),
-        },
-    }
-
-    if _HANDOFF_SCHEMA:
-        try:
-            jsonschema.validate(instance=handoff, schema=_HANDOFF_SCHEMA)
-        except jsonschema.ValidationError as exc:
-            logging.error(f"Handoff schema validation FAILED: {exc.message}")
-            return None
-
-    return handoff
+# Handoff writer relocated to handoff_writer.py (I.6)
+_HANDOFF_SCHEMA_PATH = handoff_writer._HANDOFF_SCHEMA_PATH
+_HANDOFF_SCHEMA = handoff_writer._HANDOFF_SCHEMA
+build_competitor_handoff = handoff_writer.build_competitor_handoff
 
 
 def build_help_rows():
