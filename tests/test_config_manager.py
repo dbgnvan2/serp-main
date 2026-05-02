@@ -620,6 +620,49 @@ class TestTabInitializationOrder:
         # If we got here, all imports succeeded
         assert True
 
+    def test_tab_classes_have_instance_variables(self):
+        """Verify that tab classes declare instance variables they will use.
+
+        This catches a common pattern error: initializing variables AFTER
+        calling super().__init__(), which immediately calls render_ui().
+
+        This test doesn't require tkinter - it just checks that the class
+        definitions reference the expected attributes in __init__.
+        """
+        import inspect
+        from config_manager import (
+            DomainOverridesTab,
+            IntentMappingTab,
+            ConfigSettingsTab,
+            UrlPatternRulesTab,
+        )
+
+        # Check each tab has required instance attributes
+        checks = [
+            (DomainOverridesTab, ['tree', 'entity_type_var']),
+            (IntentMappingTab, ['tree']),
+            (ConfigSettingsTab, ['section_widgets', 'section_frames']),
+            (UrlPatternRulesTab, ['tree']),
+        ]
+
+        for tab_class, expected_attrs in checks:
+            # Get the __init__ source code
+            init_source = inspect.getsource(tab_class.__init__)
+
+            # Verify that each expected attribute is initialized with self.attr = ...
+            # before the super().__init__() call
+            super_index = init_source.find('super().__init__')
+            assert super_index != -1, f"{tab_class.__name__} missing super().__init__() call"
+
+            init_before_super = init_source[:super_index]
+
+            for attr in expected_attrs:
+                attr_init = f'self.{attr} ='
+                assert attr_init in init_before_super, (
+                    f"{tab_class.__name__}: attribute '{attr}' must be initialized "
+                    f"BEFORE super().__init__() to avoid AttributeError in render_ui()"
+                )
+
     @pytest.mark.skipif(not TKINTER_AVAILABLE, reason="tkinter not available")
     def test_domain_overrides_tab_initializes_without_error(self):
         """DomainOverridesTab should initialize all attributes before render_ui()."""
