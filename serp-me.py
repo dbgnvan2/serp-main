@@ -19,6 +19,7 @@ from generate_domain_override_candidates import (
     split_candidates,
 )
 from refresh_analysis_outputs import load_config_paths, refresh_analysis_outputs
+from config_manager import ConfigManagerWindow
 
 
 def normalize_keyword_list(keywords):
@@ -306,6 +307,9 @@ class SerpLauncherApp:
 
         ttk.Button(btn_frame, text="Clear Log",
                    command=self.clear_log).pack(side="right", padx=5)
+
+        ttk.Button(btn_frame, text="Edit Configuration",
+                   command=self.open_config_manager).pack(side="right", padx=5)
 
         # Output Log
         log_frame = ttk.LabelFrame(root, text="Execution Log")
@@ -1291,6 +1295,19 @@ class SerpLauncherApp:
         )
         if self.domain_review_window and self.domain_review_window.winfo_exists():
             self.domain_review_window.destroy()
+
+    def open_config_manager(self):
+        """Open the Configuration Manager window."""
+        try:
+            self.log("\n" + "=" * 68 + "\n")
+            self.log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Opening: Configuration Manager\n")
+            self.log("-" * 68 + "\n")
+            ConfigManagerWindow(self.root, log_func=self.log)
+            self.log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Process finished with status SUCCESS\n" + "=" * 68 + "\n")
+        except Exception as e:
+            self.log(f"Error opening Configuration Manager: {e}\n")
+            self.log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Process finished with status ERROR\n" + "=" * 68 + "\n")
+            messagebox.showerror("Configuration Manager", f"Error: {e}")
 
 
 if __name__ == "__main__":
