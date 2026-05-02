@@ -5,6 +5,7 @@ Spec: serp_tool1_improvements_spec.md#I.5
 import json
 import os
 import re
+import sys
 from collections import Counter
 from datetime import datetime
 import yaml
@@ -22,7 +23,7 @@ from brief_prompts import (
     load_prompt_blocks, build_user_prompt, build_correction_message,
     build_main_report_payload, append_interpretation_notes,
 )
-from brief_llm import run_llm_report
+from brief_llm import run_llm_report, ANTHROPIC_AVAILABLE
 
 
 def progress(message):

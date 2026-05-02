@@ -8,9 +8,11 @@
 - `completion` — `serp_tool1_completion_spec.md`
 - `cleanup` — `serp_tool1_cleanup_spec.md`
 - `impr` — `serp_tool1_improvements_spec.md`
+- `config_manager` — `config_manager_spec.md`
 
 **Post-spec changes (not tracked as spec criteria):**
 - 2026-05-01: Bowen strategic pattern definitions extracted from hardcoded Python in `serp_audit.py` to `strategic_patterns.yml`. Trigger matching changed from substring to word-boundary (`re.search r'\b...\b'`). Load-time validation added in `_validate_strategic_patterns`. Tests: `test_serp_audit.py::test_strategic_patterns_loaded_from_yaml`, `::test_custom_pattern_in_yaml_fires`, `::test_trigger_matching_uses_word_boundaries`, `::test_validate_rejects_*`.
+- 2026-05-02: Configuration Manager Phase 5 completed. All 8 tabs functional with comprehensive help text, CRUD operations, validation, and error recovery. Critical bugs fixed: initialization order, Entity Type Descriptions editability, domain_role column visibility, missing Cancel buttons. See `docs/config_manager_phase5_completion_20260502.md` for status report.
 
 ---
 
@@ -171,6 +173,40 @@
 | I.6.5 | impr | Pipeline output structurally identical | `serp_audit.build_competitor_handoff is handoff_writer.build_competitor_handoff` | `tests/test_serp_audit_split.py::test_i65_*` | done |
 | I.7.1 | impr | Rule 8 exists in `~/.claude/CLAUDE.md` | `~/.claude/CLAUDE.md` Rule 8 | manual | done |
 | I.7.2 | impr | Rule's example mentions externalisation pattern | `~/.claude/CLAUDE.md` Rule 8 example | manual | done |
+| CM.1.1 | config_manager | ConfigManagerWindow class exists and is importable | `config_manager.py::ConfigManagerWindow` | `tests/test_config_manager.py::test_config_manager_window_imports` | done |
+| CM.1.2 | config_manager | All 8 tab classes exist (IntentMapping, StrategicPatterns, BriefPatternRouting, IntentClassifierTriggers, ConfigSettings, DomainOverrides, ClassificationRules, UrlPatternRules) | `config_manager.py` | `tests/test_config_manager.py::test_all_tab_classes_exist` | done |
+| CM.1.3 | config_manager | `serp-me.py` imports ConfigManagerWindow and has `open_config_manager()` method | `serp-me.py` | `tests/test_serp_me_integration.py::test_serp_me_imports_config_manager` | done |
+| CM.1.4 | config_manager | `config_validators.py` exists with 8 file validators | `config_validators.py` | `tests/test_config_validators.py::test_validators_import` | done |
+| CM.2.1 | config_manager | All 8 tabs load data from disk without error | `config_manager.py` (all tabs) | `tests/test_config_manager.py::test_*_tab_load` (8 tests) | done |
+| CM.2.2 | config_manager | All 8 tabs render UI without error | `config_manager.py` (all tabs) | `tests/test_config_manager.py::test_*_tab_render` (8 tests) | done |
+| CM.2.3 | config_manager | All 8 tabs validate data correctly | `config_validators.py` (8 validators) | `tests/test_config_validators.py::test_validate_*_valid` (8 tests) | done |
+| CM.2.4 | config_manager | All 8 tabs support CRUD (add/edit/delete/reorder) | `config_manager.py` (all tabs) | `tests/test_config_manager.py::test_*_tab_crud` (8 tests) | done |
+| CM.3.1 | config_manager | IntentMappingTab includes all 5 columns (content_type, entity_type, local_pack, domain_role, intent) | `config_manager.py::IntentMappingTab` | `tests/test_config_manager.py::test_intent_mapping_tab_all_columns` | done |
+| CM.3.2 | config_manager | StrategicPatternsTab validates triggers (≥4 chars) and required fields | `config_validators.py::validate_strategic_patterns` | `tests/test_config_validators.py::test_validate_strategic_patterns_trigger_length` | done |
+| CM.3.3 | config_manager | BriefPatternRoutingTab cross-references strategic_patterns | `config_validators.py` | `tests/test_config_validators.py::test_brief_pattern_routing_pattern_refs` | done |
+| CM.3.4 | config_manager | IntentClassifierTriggersTab validates trigger length (≥3 chars) | `config_validators.py::validate_intent_classifier_triggers` | `tests/test_config_validators.py::test_intent_classifier_triggers_min_length` | done |
+| CM.3.5 | config_manager | ConfigSettingsTab renders config.yml with type-aware widgets (int→Spinbox, bool→Checkbutton, str→Entry, list/dict→Text) | `config_manager.py::ConfigSettingsTab` | `tests/test_config_manager.py::test_config_settings_widget_types` | done |
+| CM.3.6 | config_manager | UrlPatternRulesTab validates regex patterns | `config_validators.py::validate_url_pattern_rules` | `tests/test_config_validators.py::test_url_pattern_rules_regex_validation` | done |
+| CM.3.7 | config_manager | DomainOverridesTab renders flat key-value table | `config_manager.py::DomainOverridesTab` | `tests/test_config_manager.py::test_domain_overrides_tab_load` | done |
+| CM.3.8 | config_manager | ClassificationRulesTab renders entity_types list + entity_type_descriptions dict (double-click to edit) | `config_manager.py::ClassificationRulesTab` | `tests/test_config_manager.py::test_classification_rules_tab_descriptions_editable` | done |
+| CM.4.1 | config_manager | Cross-file constraint: entity_types in domain_overrides exist in classification_rules | `config_validators.py` | `tests/test_config_validators.py::test_cross_file_entity_types` | done |
+| CM.4.2 | config_manager | Cross-file constraint: pattern_names in brief_pattern_routing exist in strategic_patterns | `config_validators.py` | `tests/test_config_validators.py::test_cross_file_pattern_names` | done |
+| CM.4.3 | config_manager | Cross-file constraint: intents in intent_mapping are valid (enum check) | `config_validators.py` | `tests/test_config_validators.py::test_intent_mapping_intent_enum` | done |
+| CM.5.1 | config_manager | Save creates backup before write (*.backup.<timestamp>) | `config_manager.py::ConfigManagerWindow.backup_files` | `tests/test_config_manager.py::test_save_creates_backup` | done |
+| CM.5.2 | config_manager | Save validates all tabs before write | `config_manager.py::ConfigManagerWindow.save_all` | `tests/test_config_manager.py::test_save_validates_before_write` | done |
+| CM.5.3 | config_manager | Save fails gracefully with restore on error | `config_manager.py::ConfigManagerWindow.restore_files` | `tests/test_config_manager.py::test_save_restore_on_error` | done |
+| CM.5.4 | config_manager | UI reloads data from disk after successful save | `config_manager.py::ConfigManagerWindow` | `tests/test_config_manager.py::test_ui_reload_after_save` | done |
+| CM.6.1 | config_manager | All 8 tabs have ≥3 lines of help text (HELP_BY_FILE) | `config_manager.py::HELP_BY_FILE` | manual | done |
+| CM.6.2 | config_manager | config.yml has ≥20 field-level help entries (HELP_BY_FIELD) | `config_manager.py::HELP_BY_FIELD` | manual | done |
+| CM.6.3 | config_manager | Every field in every tab has `?` button showing help | `config_manager.py` (all tabs) | manual | done |
+| CM.6.4 | config_manager | Brief Pattern Routing help expanded with PURPOSE, STRUCTURE, EXAMPLE | `config_manager.py::HELP_BY_FILE["brief_pattern_routing.yml"]` | manual | done |
+| CM.6.5 | config_manager | Intent Classifier Triggers help expanded with PURPOSE, STRUCTURE, EXAMPLE | `config_manager.py::HELP_BY_FILE["intent_classifier_triggers.yml"]` | manual | done |
+| CM.7.1 | config_manager | Dialog Cancel buttons on all edit windows | `config_manager.py` | `tests/test_config_manager.py::test_dialog_cancel_buttons` | done |
+| CM.7.2 | config_manager | Discard changes workflow with prompt | `config_manager.py::ConfigManagerWindow` | `tests/test_config_manager.py::test_discard_changes_prompt` | done |
+| CM.8.1 | config_manager | Tab initialization order bug fixed (instance vars before super().__init__) | `config_manager.py` (all tabs) | `tests/test_config_manager.py::test_tab_classes_have_instance_variables` | done |
+| CM.8.2 | config_manager | All 8 tabs tested for load/render/validate/CRUD | `tests/test_config_manager.py` | 50+ tests across ConfigTab tests | done |
+| CM.8.3 | config_manager | All 8 validators tested against valid/invalid/edge-case data | `tests/test_config_validators.py` | 40+ validator tests | done |
+| CM.8.4 | config_manager | Test count: 476 passing, 28 skipped (no failures) | `pytest tests/test_config_manager.py tests/test_config_validators.py -q` | automatic | done |
 
 ---
 
@@ -223,3 +259,8 @@ Criteria whose Test cell is `manual` require human review. Each is listed below 
 | C.4.1 | Open `docs/v2_dod_status_20260501_final.md`. Confirm file exists in `docs/`. |
 | C.4.2 | Run `ls *.md \| grep v2_dod_status`. Confirm returns nothing. |
 | C.4.3 | Open `docs/c_status_20260501.md`. Confirm file exists. |
+| CM.6.1 | Open `config_manager.py`. Search for `HELP_BY_FILE` dict. Confirm 8 entries exist with ≥3 lines each. |
+| CM.6.2 | Open `config_manager.py`. Search for `HELP_BY_FIELD` dict. Confirm ≥20 entries for config.yml fields. |
+| CM.6.3 | Open `config_manager.py`. Search for `create_field_with_help`. Confirm method adds `?` button to fields. |
+| CM.6.4 | Open `config_manager.py`. Search for `HELP_BY_FILE["brief_pattern_routing.yml"]`. Confirm text contains PURPOSE, STRUCTURE, EXAMPLE. |
+| CM.6.5 | Open `config_manager.py`. Search for `HELP_BY_FILE["intent_classifier_triggers.yml"]`. Confirm text contains PURPOSE, STRUCTURE, EXAMPLE. |

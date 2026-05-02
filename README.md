@@ -70,6 +70,28 @@ The launcher walks through each step in order. After a pipeline run it automatic
 | **5. Export History** | Dumps the SQLite rank history to CSV files. |
 | **6. Review Domain Overrides** | Opens a checklist of domains whose entity type (counselling, directory, legal, etc.) may need manual correction. Approve to update `domain_overrides.yml`. |
 | **7. Feasibility Analysis** | Re-runs Domain Authority gap scoring from the existing JSON. Cached — free to run multiple times. |
+| **Edit Configuration** | Opens Configuration Manager — edit all config files (intent mapping, patterns, rules, settings) in a GUI. Validates before save, backup before write. See "Configuration Manager" section below. |
+
+### Configuration Manager
+
+Click the **"Edit Configuration"** button in the launcher to open a GUI for editing all configuration files without a text editor:
+
+- **Intent Mapping** — Define rules mapping SERP characteristics to intent verdicts (informational, transactional, local, etc.).
+- **Strategic Patterns** — Add Bowen Family Systems patterns with triggers, status quo message, and content angles.
+- **Brief Pattern Routing** — Route patterns to content brief sections (PAA themes, categories, keyword hints).
+- **Intent Classifier Triggers** — Define medical and systemic trigger vocabularies for intent classification.
+- **Config Settings** — Edit operational settings (SerpAPI, file paths, thresholds, client preferences).
+- **Domain Overrides** — Manual entity-type overrides per domain (e.g., psychologytoday.com = directory).
+- **Classification Rules** — Entity-type definitions and descriptions.
+- **URL Pattern Rules** — Fallback URL patterns for pages the classifier couldn't categorize.
+
+**Features:**
+- Every field has a help button (`?`) showing what it means and why it matters.
+- Validation before save checks schema rules and cross-file constraints (e.g., pattern names, entity types).
+- Backup and restore — save backs up before writing; if save fails, restores from backup automatically.
+- CRUD operations — add, edit, delete, reorder entries; order-sensitive files preserve first-match-wins evaluation order.
+
+For details, see `docs/config_reference.md#configuration-manager-gui`.
 
 ### API usage modes
 
